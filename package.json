@@ -1,6 +1,6 @@
 {
   "name": "pi-sub2api-provider",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Pi extension that auto-registers sub2api/OpenAI-compatible providers and displays quota usage.",
   "type": "module",
   "license": "MIT",
