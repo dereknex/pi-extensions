@@ -9,6 +9,9 @@ import ts from "typescript";
 const testFile = fileURLToPath(import.meta.url);
 
 async function runChild() {
+	if (process.env.PI_REMOTE_MODELS_UNAVAILABLE === "1") {
+		globalThis.fetch = async () => new Response(null, { status: 503 });
+	}
 	const { default: loadExtension } = await import(pathToFileURL(process.env.PI_TEST_EXTENSION).href);
 	const registrations = [];
 	const pi = {
@@ -17,11 +20,12 @@ async function runChild() {
 		registerCommand: () => undefined,
 	};
 	await loadExtension(pi);
-	assert.equal(registrations.length, 1);
-	console.log(registrations[0].api);
+	const expectedRegistrations = Number(process.env.PI_EXPECTED_REGISTRATIONS ?? "1");
+	assert.equal(registrations.length, expectedRegistrations);
+	if (registrations[0]) console.log(registrations[0].api);
 }
 
-function runScenario(compiledExtension, api) {
+function runScenario(compiledExtension, { api, includeModels = true, remoteModelsUnavailable = false } = {}) {
 	const home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sub2api-home-"));
 	const agentDir = path.join(home, ".pi", "agent");
 	fs.mkdirSync(agentDir, { recursive: true });
@@ -32,7 +36,7 @@ function runScenario(compiledExtension, api) {
 				test: {
 					baseUrl: "https://example.test/v1",
 					...(api ? { api } : {}),
-					models: [{ id: "test-model" }],
+					...(includeModels ? { models: [{ id: "test-model" }] } : {}),
 				},
 			},
 		}),
@@ -41,11 +45,18 @@ function runScenario(compiledExtension, api) {
 
 	try {
 		const result = spawnSync(process.execPath, [testFile], {
-			env: { ...process.env, HOME: home, PI_API_SELECTION_CHILD: "1", PI_TEST_EXTENSION: compiledExtension },
+			env: {
+				...process.env,
+				HOME: home,
+				PI_API_SELECTION_CHILD: "1",
+				PI_TEST_EXTENSION: compiledExtension,
+				PI_EXPECTED_REGISTRATIONS: includeModels ? "1" : "0",
+				PI_REMOTE_MODELS_UNAVAILABLE: remoteModelsUnavailable ? "1" : "0",
+			},
 			encoding: "utf8",
 		});
 		assert.equal(result.status, 0, result.stderr);
-		return result.stdout.trim();
+		return { stdout: result.stdout.trim(), stderr: result.stderr.trim() };
 	} finally {
 		fs.rmSync(home, { recursive: true, force: true });
 	}
@@ -62,9 +73,15 @@ if (process.env.PI_API_SELECTION_CHILD === "1") {
 			compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
 		});
 		fs.writeFileSync(compiledExtension, output.outputText);
-		assert.equal(runScenario(compiledExtension), "openai-completions");
-		assert.equal(runScenario(compiledExtension, "openai-responses"), "openai-responses");
-		console.log("API adapter selection passed");
+		assert.equal(runScenario(compiledExtension).stdout, "openai-completions");
+		assert.equal(runScenario(compiledExtension, { api: "openai-responses" }).stdout, "openai-responses");
+		const unavailableModels = runScenario(compiledExtension, {
+			includeModels: false,
+			remoteModelsUnavailable: true,
+		});
+		assert.equal(unavailableModels.stdout, "");
+		assert.equal(unavailableModels.stderr, "");
+		console.log("API adapter selection and silent model probing passed");
 	} finally {
 		fs.rmSync(buildDir, { recursive: true, force: true });
 	}

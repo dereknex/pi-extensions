@@ -52,10 +52,12 @@
   "pending_follow_up": null,
   "last_review": {
     "decision": "pass",
-    "evidence": "Independent QA pass: Node-based API selection test runs with temporary HOME isolation; omitted and explicit API scenarios pass; npm test passes without Bun on PATH; npm run check and npm run pack:dry-run pass; CI invokes npm test on Node 20.",
-    "artifacts": "",
-    "notes": "",
-    "recorded_at": "2026-07-14T10:15:00Z"
+    "evidence": "QA pass: formatting churn and unrelated fetchWithRetry cleanup removed; silent /models probe regression remains covered; npm test, npm run check, git diff --check, removed-log search, and error diagnostics all passed.",
+    "artifacts": "src/index.ts,test/api-selection.test.mjs",
+    "notes": "Final diff hash: 5efff0ca7ae65b438091896600f353a70b877a400cbdf4d51f18a6f7a68e9f04",
+    "recorded_at": "2026-07-28T03:44:23Z",
+    "target_kind": "follow_up",
+    "target_id": "follow-up-167b48515072"
   },
   "validated_plan_snapshot": {
     "plan_path": "docs/plans/node-only-api-selection-test.md",
@@ -162,8 +164,38 @@
         ],
         "evidence_ref": "Independent imm-code-review pass: Node-only test uses existing TypeScript plus Node subprocess APIs; temporary HOME isolation and both API assertions are correct; CI runs npm test; no dependency or runtime provider change was introduced."
       }
+    },
+    {
+      "at": "2026-07-28T03:41:07Z",
+      "action": "review_gate_reopened",
+      "details": {
+        "gate": "imm-code-review",
+        "changed_files_signature": "7f0cceaa5f014e3b1d87e7d499cc7c9bf338fe1ca55a4cc0bc85405ef4dadcb6",
+        "prior_evidence_ref": "Independent imm-code-review pass: Node-only test uses existing TypeScript plus Node subprocess APIs; temporary HOME isolation and both API assertions are correct; CI runs npm test; no dependency or runtime provider change was introduced.",
+        "finding_evidence_ref": "Review finding: formatting churn obscures the bounded startup-log change; prior handoff used a diff hash instead of the ledger changed-file signature",
+        "follow_up_id": "follow-up-167b48515072"
+      }
+    },
+    {
+      "at": "2026-07-28T03:41:07Z",
+      "action": "follow_up_open",
+      "details": {
+        "id": "follow-up-167b48515072",
+        "round": 1,
+        "gate": "imm-code-review"
+      }
+    },
+    {
+      "at": "2026-07-28T03:44:23Z",
+      "action": "review_follow_up",
+      "details": {
+        "id": "follow-up-167b48515072",
+        "round": 1,
+        "decision": "pass"
+      }
     }
   ],
+  "review_follow_up_start_index": 0,
   "requires_replan": false,
   "runtime_status": "idle",
   "plan_path": "docs/plans/node-only-api-selection-test.md",
@@ -176,20 +208,81 @@
   "active_step": null,
   "next_action": null,
   "review_state": {
-    "gates": {
-      "imm-code-review": {
+    "gates": {}
+  },
+  "follow_up_history": [
+    {
+      "id": "follow-up-167b48515072",
+      "state": "closed",
+      "scope": [
+        "src/index.ts",
+        "test/api-selection.test.mjs"
+      ],
+      "change_goal": "Restore unrelated formatting and fetchWithRetry cleanup, retaining only silent model probing regression coverage and the pre-existing max thinking-level change",
+      "verification_hint": "git diff --check && npm test && npm run check",
+      "origin_review": {
         "gate": "imm-code-review",
-        "decision": "pass",
-        "reviewed_changed_files": [
-          ".github/workflows/check.yml",
-          "package.json",
+        "evidence_ref": "Review finding: formatting churn obscures the bounded startup-log change; prior handoff used a diff hash instead of the ledger changed-file signature"
+      },
+      "execution_evidence": {
+        "changed_files": [
+          "src/index.ts",
           "test/api-selection.test.mjs"
         ],
-        "changed_files_signature": "7f0cceaa5f014e3b1d87e7d499cc7c9bf338fe1ca55a4cc0bc85405ef4dadcb6",
-        "evidence_ref": "Independent imm-code-review pass: Node-only test uses existing TypeScript plus Node subprocess APIs; temporary HOME isolation and both API assertions are correct; CI runs npm test; no dependency or runtime provider change was introduced.",
-        "reviewer_skill": "imm-code-review",
-        "reviewed_at": "2026-07-14T10:16:27Z"
-      }
+        "status": "passed",
+        "checks": [
+          {
+            "kind": "command",
+            "command": "npm test",
+            "status": "passed",
+            "exit_code": 0,
+            "summary": "API adapter selection and silent model probing regression passed"
+          },
+          {
+            "kind": "command",
+            "command": "npm run check",
+            "status": "passed",
+            "exit_code": 0,
+            "summary": "TypeScript noEmit check passed"
+          },
+          {
+            "kind": "command",
+            "command": "git diff --check and removed-log rg",
+            "status": "passed",
+            "exit_code": 0,
+            "summary": "Diff is clean and removed startup warning strings are absent"
+          },
+          {
+            "kind": "manual",
+            "command": "lsp_diagnostics src/index.ts test/api-selection.test.mjs",
+            "status": "passed",
+            "exit_code": null,
+            "summary": "No error diagnostics reported"
+          }
+        ],
+        "risk_notes": "Formatting churn and unrelated fetchWithRetry cleanup were removed; src diff retains only the pre-existing max mapping and silent remote model probe behavior. Evidence recording schema was corrected across two rejected attempts: unsupported diagnostic kind, then manual exit_code changed to null.",
+        "recorded_at": "2026-07-28T03:44:06Z",
+        "evidence_schema": "structured-v1",
+        "verification_result": "API adapter selection and silent model probing regression passed; TypeScript noEmit check passed; Diff is clean and removed startup warning strings are absent; No error diagnostics reported",
+        "verification_command": "npm test; npm run check; git diff --check and removed-log rg; lsp_diagnostics src/index.ts test/api-selection.test.mjs",
+        "notes": ""
+      },
+      "opened_at": "2026-07-28T03:41:07Z",
+      "round": 1,
+      "qa_decision": {
+        "decision": "pass",
+        "evidence": "QA pass: formatting churn and unrelated fetchWithRetry cleanup removed; silent /models probe regression remains covered; npm test, npm run check, git diff --check, removed-log search, and error diagnostics all passed.",
+        "artifacts": "src/index.ts,test/api-selection.test.mjs",
+        "notes": "Final diff hash: 5efff0ca7ae65b438091896600f353a70b877a400cbdf4d51f18a6f7a68e9f04",
+        "recorded_at": "2026-07-28T03:44:23Z"
+      },
+      "closed_at": "2026-07-28T03:44:23Z"
     }
+  ],
+  "last_follow_up_completion": {
+    "id": "follow-up-167b48515072",
+    "round": 1,
+    "completed_at": "2026-07-28T03:44:23Z",
+    "reported_at": null
   }
 }

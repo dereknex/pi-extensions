@@ -118,6 +118,7 @@ const DEFAULT_THINKING_LEVEL_MAP: ThinkingLevelMap = {
 	medium: "medium",
 	high: "high",
 	xhigh: "xhigh",
+	max: "max",
 };
 
 /**
@@ -568,16 +569,7 @@ export default async function (pi: ExtensionAPI) {
 				if (registered) {
 					state.modelsLoaded = true;
 				} else {
-					eagerModelLoads.push(
-						loadRemoteModels(providerId).then(() => {
-							if (!state.modelsLoaded) {
-								console.warn(
-									`[sub2api-quota] Provider ${providerId}: no local models and remote /models unavailable. ` +
-									`Add a models array to models.json or verify baseUrl/auth.`,
-								);
-							}
-						}),
-					);
+					eagerModelLoads.push(loadRemoteModels(providerId));
 				}
 			} catch (e) {
 				console.error(`[sub2api-quota] Failed to initialize provider ${providerId}:`, e);
