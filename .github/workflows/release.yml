@@ -29,6 +29,9 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Ensure npm OIDC config
+        run: npm config set //registry.npmjs.org/:provenance=true
+
       - name: Install
         run: npm ci
 
