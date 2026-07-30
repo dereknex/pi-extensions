@@ -52,5 +52,4 @@ jobs:
           title: "chore(release): version packages"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NODE_AUTH_TOKEN: 'oidc-dummy-token'
           NPM_CONFIG_PROVENANCE: true
