@@ -592,6 +592,34 @@ function writeModelsCache(providerId: string, models: any[]): void {
 	}
 }
 
+function clearModelsCache(providerId: string): void {
+	try {
+		const cache = readModelsCacheFile();
+		if (!(providerId in cache)) return;
+		delete cache[providerId];
+		const cachePath = getModelsCachePath();
+		fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+		fs.writeFileSync(cachePath, JSON.stringify(cache, null, "\t"), "utf-8");
+	} catch (e) {
+		console.error(`[sub2api-quota] Failed to clear models cache:`, e);
+	}
+}
+
+function providerHasAuth(auth: AuthConfig, providerId: string): boolean {
+	const entry = auth[providerId];
+	return Boolean(entry?.key || entry?.access);
+}
+
+/** Drop cached /models for providers that no longer have credentials (e.g. after /logout). */
+function pruneModelsCacheForMissingAuth(auth: AuthConfig): void {
+	const cache = readModelsCacheFile();
+	for (const providerId of Object.keys(cache)) {
+		if (!providerHasAuth(auth, providerId)) {
+			clearModelsCache(providerId);
+		}
+	}
+}
+
 function readModelsCache(providerId: string): any[] | undefined {
 	const cache = readModelsCacheFile();
 	const models = cache[providerId];
@@ -634,6 +662,53 @@ export default async function (pi: ExtensionAPI) {
 		} catch (e) {
 			console.error("[sub2api-quota] Error parsing auth.json:", e);
 		}
+	}
+	pruneModelsCacheForMissingAuth(auth);
+
+	function readAuthFile(): AuthConfig {
+		if (!fs.existsSync(authPath)) return {};
+		try {
+			return JSON.parse(fs.readFileSync(authPath, "utf-8")) as AuthConfig;
+		} catch (e) {
+			console.error("[sub2api-quota] Error parsing auth.json:", e);
+			return {};
+		}
+	}
+
+	function onAuthCredentialsChanged(): void {
+		auth = readAuthFile();
+		pruneModelsCacheForMissingAuth(auth);
+		for (const providerId of [...lazyProviders.keys()]) {
+			if (providerHasAuth(auth, providerId)) continue;
+			lazyProviders.delete(providerId);
+			quotaProviders.delete(providerId);
+			try {
+				pi.unregisterProvider(providerId);
+			} catch (e) {
+				console.error(
+					`[sub2api-quota] Failed to unregister provider ${providerId}:`,
+					e,
+				);
+			}
+		}
+	}
+
+	let authWatchTimer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		if (fs.existsSync(authPath)) {
+			fs.watchFile(authPath, { interval: 100, persistent: false }, () => {
+				clearTimeout(authWatchTimer);
+				authWatchTimer = setTimeout(() => {
+					try {
+						onAuthCredentialsChanged();
+					} catch (e) {
+						console.error("[sub2api-quota] Failed to handle auth change:", e);
+					}
+				}, 50);
+			});
+		}
+	} catch (e) {
+		console.error("[sub2api-quota] Failed to watch auth.json:", e);
 	}
 
 	let modelsConfig: ModelsConfig = {};
