@@ -26,12 +26,22 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           registry-url: https://registry.npmjs.org
 
-      - name: Ensure npm OIDC config
-        run: npm config set //registry.npmjs.org/:provenance=true
+      # Trusted publishing needs npm >= 11.5.1 and Node >= 22.14.
+      # setup-node + registry-url writes a placeholder _authToken that makes
+      # npm prefer bearer auth over OIDC and fail publish with E404.
+      - name: Prepare npm for trusted publishing
+        run: |
+          npm install -g npm@latest
+          node --version
+          npm --version
+          if [ -n "${NPM_CONFIG_USERCONFIG:-}" ] && [ -f "$NPM_CONFIG_USERCONFIG" ]; then
+            sed -i '/:_authToken=/d' "$NPM_CONFIG_USERCONFIG"
+          fi
+          echo "NODE_AUTH_TOKEN=" >> "$GITHUB_ENV"
 
       - name: Install
         run: npm ci
