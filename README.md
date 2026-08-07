@@ -7,7 +7,7 @@ Pi coding agent extensions monorepo — a collection of [pi](https://github.com/
 | Package | npm | Description |
 | --- | --- | --- |
 | [pi-sub2api-provider](./packages/pi-sub2api-provider) | [`pi-sub2api-provider`](https://www.npmjs.com/package/pi-sub2api-provider) | Auto-registers sub2api/OpenAI-compatible providers and displays quota usage. |
-| [pi-minimal-footer](./packages/pi-minimal-footer) | [`pi-minimal-footer`](https://www.npmjs.com/package/pi-minimal-footer) | Minimal footer: cwd, git branch, model/thinking, perf stats, quota, and context bar. |
+| [pi-minimal-statusbar](./packages/pi-minimal-statusbar) | [`pi-minimal-statusbar`](https://www.npmjs.com/package/pi-minimal-statusbar) | Minimal footer: cwd, git branch, model/thinking, perf stats, quota, and context bar. |
 
 Each package lives in `packages/<name>` and is independently versioned and published to npm.
 

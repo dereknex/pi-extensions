@@ -2,7 +2,7 @@
  * Minimal Footer — shows only what matters.
  *
  * Migrated from the global extension `~/.pi/agent/extensions/minimal-footer.ts`
- * into the pi-extensions monorepo as the `pi-minimal-footer` package.
+ * into the pi-extensions monorepo as the `pi-minimal-statusbar` package.
  *
  * Left:  ~/path/to/project git:branch± • model (thinking) • goal
  * Right: [####.........] 40% (128K)

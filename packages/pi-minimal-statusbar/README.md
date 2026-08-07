@@ -1,6 +1,6 @@
-# pi-minimal-footer
+# pi-minimal-statusbar
 
-[![npm](https://img.shields.io/npm/v/pi-minimal-footer.svg)](https://www.npmjs.com/package/pi-minimal-footer)
+[![npm](https://img.shields.io/npm/v/pi-minimal-statusbar.svg)](https://www.npmjs.com/package/pi-minimal-statusbar)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![CI](https://github.com/dereknex/pi-extensions/actions/workflows/check.yml/badge.svg)](https://github.com/dereknex/pi-extensions/actions/workflows/check.yml)
 
@@ -27,14 +27,14 @@ Part of the [pi-extensions](https://github.com/dereknex/pi-extensions) monorepo.
 ## Installation
 
 ```bash
-pi install npm:pi-minimal-footer
+pi install npm:pi-minimal-statusbar
 ```
 
 Or add it to `~/.pi/agent/settings.json`:
 
 ```json
 {
-  "packages": ["npm:pi-minimal-footer"]
+  "packages": ["npm:pi-minimal-statusbar"]
 }
 ```
 
