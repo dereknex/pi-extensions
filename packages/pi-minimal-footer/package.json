@@ -1,6 +1,6 @@
 {
   "name": "pi-minimal-footer",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Minimal pi footer: cwd, git branch, model with thinking level, tps/ttft/cache stats, quota, goal, and a context usage bar.",
   "type": "module",
   "license": "MIT",
