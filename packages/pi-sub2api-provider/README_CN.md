@@ -6,6 +6,10 @@
 
 独立的 pi package：自动从 `~/.pi/agent/models.json` 与 `~/.pi/agent/auth.json` 读取 OpenAI-compatible / sub2api provider 配置，注册 provider，并在 pi 状态栏与 `/quota` 命令中展示额度信息。
 
+隶属于 [pi-extensions](https://github.com/dereknex/pi-extensions) monorepo。
+
+[English](./README.md)
+
 ## 能力
 
 - 扫描 `~/.pi/agent/models.json` 中的 providers。
@@ -96,16 +100,33 @@ cp /Users/derek/workspaces/pi-extensions/packages/pi-sub2api-provider/src/index.
 
 ## 开发检查
 
+在 monorepo 根目录（安装全部包并检查全部包）：
+
 ```bash
-cd /Users/derek/workspaces/pi-extensions/packages/pi-sub2api-provider
-npm ci
+cd /Users/derek/workspaces/pi-extensions
+npm install
+npm test
 npm run check
 npm run pack:dry-run
 ```
 
+或仅针对本包：
+
+```bash
+npm test -w pi-sub2api-provider
+npm run check -w pi-sub2api-provider
+```
+
 ## 发布
 
-本项目使用 Changesets 管理版本与 npm 发布。首次发布时 `package.json` 保持 `0.0.0`，由 `.changeset/initial-release.md` 生成 `0.1.0` release PR。
+本包通过 pi-extensions monorepo 统一版本管理与发布。每个影响用户的改动都需要提交 changeset：
+
+```bash
+cd /Users/derek/workspaces/pi-extensions
+npm run changeset
+```
+
+合并 release PR 后自动发布到 npm。
 
 详细流程见 [`docs/RELEASE.md`](./docs/RELEASE.md)。
 

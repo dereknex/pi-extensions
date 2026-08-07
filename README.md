@@ -37,7 +37,7 @@ npm run changeset
 - The `Release` GitHub Actions workflow creates/updates a release PR after merges.
 - Merging the release PR publishes all bumped packages to npm (trusted publishing, OIDC).
 
-Details: [docs/RELEASE.md](https://github.com/dereknex/pi-extensions/blob/main/packages/pi-sub2api-provider/docs/RELEASE.md)
+Details: [docs/RELEASE.md](./packages/pi-sub2api-provider/docs/RELEASE.md)
 
 ## License
 

@@ -6,6 +6,8 @@
 
 A standalone pi package that reads OpenAI-compatible / sub2api provider config from `~/.pi/agent/models.json` and `~/.pi/agent/auth.json`, registers providers, and shows quota usage in the pi status bar and via the `/quota` command.
 
+Part of the [pi-extensions](https://github.com/dereknex/pi-extensions) monorepo.
+
 [中文文档](./README_CN.md)
 
 ## Features
@@ -116,17 +118,33 @@ The provider defaults to `openai-completions`. To opt into Pi's generic OpenAI R
 
 ## Development
 
+From the monorepo root (installs all packages and runs checks for all of them):
+
 ```bash
-cd /Users/derek/workspaces/pi-extensions/packages/pi-sub2api-provider
-npm ci
+cd /Users/derek/workspaces/pi-extensions
+npm install
 npm test
 npm run check
 npm run pack:dry-run
 ```
 
+Or scoped to this package only:
+
+```bash
+npm test -w pi-sub2api-provider
+npm run check -w pi-sub2api-provider
+```
+
 ## Release
 
-This project uses Changesets to manage versioning and npm publishing. For the first release, `package.json` stays at `0.0.0`; the `0.1.0` release PR is generated from `.changeset/initial-release.md`.
+This package is versioned and released through the pi-extensions monorepo. Every user-facing change needs a changeset:
+
+```bash
+cd /Users/derek/workspaces/pi-extensions
+npm run changeset
+```
+
+Merging the release PR publishes this package to npm automatically.
 
 See [`docs/RELEASE.md`](./docs/RELEASE.md) for details.
 
