@@ -1,0 +1,60 @@
+{
+  "name": "pi-sub2api-provider",
+  "version": "0.5.1",
+  "description": "Pi extension that auto-registers sub2api/OpenAI-compatible providers and displays quota usage.",
+  "type": "module",
+  "license": "MIT",
+  "author": "dereknex",
+  "homepage": "https://github.com/dereknex/pi-sub2api-provider#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dereknex/pi-sub2api-provider.git"
+  },
+  "bugs": {
+    "url": "https://github.com/dereknex/pi-sub2api-provider/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "sub2api",
+    "provider",
+    "quota"
+  ],
+  "files": [
+    "src",
+    "docs",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "package.json"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "node test/api-selection.test.mjs",
+    "pack:dry-run": "npm pack --dry-run",
+    "clean": "rm -rf node_modules package-lock.json",
+    "changeset": "changeset",
+    "version": "changeset version",
+    "release": "changeset publish"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.27.12",
+    "@earendil-works/pi-coding-agent": "^0.80.2",
+    "@types/node": "^24.12.4",
+    "typescript": "^5.9.3"
+  }
+}

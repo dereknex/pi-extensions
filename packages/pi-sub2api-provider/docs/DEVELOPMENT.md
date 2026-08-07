@@ -2,7 +2,7 @@
 
 ## 目标
 
-把原先放在 `~/.pi/agent/extensions/sub2api-quota.ts` 的个人扩展整理成独立目录 `/Users/derek/workspaces/pi-sub2api-provider`，方便：
+把原先放在 `~/.pi/agent/extensions/sub2api-quota.ts` 的个人扩展整理成独立目录 `/Users/derek/workspaces/pi-extensions/packages/pi-sub2api-provider`，方便：
 
 - 独立维护；
 - 通过 `pi install <local-path>` 安装；

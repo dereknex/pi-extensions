@@ -3,7 +3,7 @@
 ## 推荐安装
 
 ```bash
-pi install /Users/derek/workspaces/pi-sub2api-provider
+pi install /Users/derek/workspaces/pi-extensions/packages/pi-sub2api-provider
 ```
 
 安装后重启 pi，或在交互界面中执行 `/reload`。
@@ -11,7 +11,7 @@ pi install /Users/derek/workspaces/pi-sub2api-provider
 ## 临时验证
 
 ```bash
-pi -e /Users/derek/workspaces/pi-sub2api-provider
+pi -e /Users/derek/workspaces/pi-extensions/packages/pi-sub2api-provider
 ```
 
 ## 从旧位置迁移
@@ -25,7 +25,7 @@ pi -e /Users/derek/workspaces/pi-sub2api-provider
 新入口：
 
 ```text
-/Users/derek/workspaces/pi-sub2api-provider/src/index.ts
+/Users/derek/workspaces/pi-extensions/packages/pi-sub2api-provider/src/index.ts
 ```
 
 确认新 package 可用后，可以选择删除旧全局扩展，避免重复注册：

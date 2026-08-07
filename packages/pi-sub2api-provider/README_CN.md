@@ -45,13 +45,13 @@ pi install git:github.com/dereknex/pi-sub2api-provider
 ### 方式三：作为本地 package 安装
 
 ```bash
-pi install ./pi-sub2api-provider
+pi install ./packages/pi-sub2api-provider
 ```
 
 ### 方式四：临时加载测试
 
 ```bash
-pi -e /Users/derek/workspaces/pi-sub2api-provider
+pi -e /Users/derek/workspaces/pi-extensions/packages/pi-sub2api-provider
 ```
 
 ### 方式五：继续用全局扩展目录
@@ -59,7 +59,7 @@ pi -e /Users/derek/workspaces/pi-sub2api-provider
 如果暂时不想切换安装方式，可以把入口复制回全局扩展：
 
 ```bash
-cp /Users/derek/workspaces/pi-sub2api-provider/src/index.ts ~/.pi/agent/extensions/sub2api-quota.ts
+cp /Users/derek/workspaces/pi-extensions/packages/pi-sub2api-provider/src/index.ts ~/.pi/agent/extensions/sub2api-quota.ts
 ```
 
 ## 配置要求
@@ -97,7 +97,7 @@ cp /Users/derek/workspaces/pi-sub2api-provider/src/index.ts ~/.pi/agent/extensio
 ## 开发检查
 
 ```bash
-cd /Users/derek/workspaces/pi-sub2api-provider
+cd /Users/derek/workspaces/pi-extensions/packages/pi-sub2api-provider
 npm ci
 npm run check
 npm run pack:dry-run
