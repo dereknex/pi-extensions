@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/pi-sub2api-provider.svg)](https://www.npmjs.com/package/pi-sub2api-provider)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-[![CI](https://github.com/dereknex/pi-sub2api-provider/actions/workflows/check.yml/badge.svg)](https://github.com/dereknex/pi-sub2api-provider/actions/workflows/check.yml)
+[![CI](https://github.com/dereknex/pi-extensions/actions/workflows/check.yml/badge.svg)](https://github.com/dereknex/pi-extensions/actions/workflows/check.yml)
 
 独立的 pi package：自动从 `~/.pi/agent/models.json` 与 `~/.pi/agent/auth.json` 读取 OpenAI-compatible / sub2api provider 配置，注册 provider，并在 pi 状态栏与 `/quota` 命令中展示额度信息。
 
@@ -39,7 +39,7 @@ pi install npm:pi-sub2api-provider
 ### 方式二：从 git 安装
 
 ```bash
-pi install git:github.com/dereknex/pi-sub2api-provider
+pi install git:github.com/dereknex/pi-extensions
 ```
 
 ### 方式三：作为本地 package 安装

@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/pi-sub2api-provider.svg)](https://www.npmjs.com/package/pi-sub2api-provider)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-[![CI](https://github.com/dereknex/pi-sub2api-provider/actions/workflows/check.yml/badge.svg)](https://github.com/dereknex/pi-sub2api-provider/actions/workflows/check.yml)
+[![CI](https://github.com/dereknex/pi-extensions/actions/workflows/check.yml/badge.svg)](https://github.com/dereknex/pi-extensions/actions/workflows/check.yml)
 
 A standalone pi package that reads OpenAI-compatible / sub2api provider config from `~/.pi/agent/models.json` and `~/.pi/agent/auth.json`, registers providers, and shows quota usage in the pi status bar and via the `/quota` command.
 
@@ -41,7 +41,7 @@ Or add it to `~/.pi/agent/settings.json`:
 ### Option 2: From git
 
 ```bash
-pi install git:github.com/dereknex/pi-sub2api-provider
+pi install git:github.com/dereknex/pi-extensions
 ```
 
 ### Option 3: As a local package

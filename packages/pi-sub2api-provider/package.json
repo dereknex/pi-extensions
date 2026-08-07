@@ -5,13 +5,13 @@
   "type": "module",
   "license": "MIT",
   "author": "dereknex",
-  "homepage": "https://github.com/dereknex/pi-sub2api-provider#readme",
+  "homepage": "https://github.com/dereknex/pi-extensions#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/dereknex/pi-sub2api-provider.git"
+    "url": "git+https://github.com/dereknex/pi-extensions.git"
   },
   "bugs": {
-    "url": "https://github.com/dereknex/pi-sub2api-provider/issues"
+    "url": "https://github.com/dereknex/pi-extensions/issues"
   },
   "keywords": [
     "pi-package",

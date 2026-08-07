@@ -12,7 +12,7 @@
 
 ## 首次发布前必须准备
 
-1. GitHub 仓库已创建：`dereknex/pi-sub2api-provider`。
+1. GitHub 仓库已创建：`dereknex/pi-extensions`。
 2. 本地 remote 指向该仓库：
 
    ```bash
