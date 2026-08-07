@@ -1,5 +1,11 @@
 # pi-minimal-statusbar
 
+## 0.1.1
+
+### Patch Changes
+
+- b96631e: Verify the OIDC (Trusted Publisher) release pipeline end to end.
+
 ## 0.1.0
 
 ### Minor Changes
