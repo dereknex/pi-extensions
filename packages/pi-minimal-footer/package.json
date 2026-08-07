@@ -1,0 +1,57 @@
+{
+  "name": "pi-minimal-footer",
+  "version": "0.0.0",
+  "description": "Minimal pi footer: cwd, git branch, model with thinking level, tps/ttft/cache stats, quota, goal, and a context usage bar.",
+  "type": "module",
+  "license": "MIT",
+  "author": "dereknex",
+  "homepage": "https://github.com/dereknex/pi-extensions#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dereknex/pi-extensions.git"
+  },
+  "bugs": {
+    "url": "https://github.com/dereknex/pi-extensions/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "footer",
+    "statusbar",
+    "tui"
+  ],
+  "files": [
+    "src",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "package.json"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "pack:dry-run": "npm pack --dry-run",
+    "clean": "rm -rf node_modules"
+  },
+  "dependencies": {
+    "@earendil-works/pi-tui": "^0.84.1"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.84.1",
+    "@types/node": "^24.12.4",
+    "typescript": "^5.9.3"
+  }
+}
