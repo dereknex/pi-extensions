@@ -5,6 +5,7 @@
 ### Minor Changes
 
 - Report the default model to Herdr on session start (pi startup, reload, resume) via the `session_start` hook, in addition to model switches.
+- Drop the provider prefix from the reported model label (e.g. `claude-3-7-sonnet` instead of `anthropic/claude-3-7-sonnet`).
 
 ## 0.1.0
 

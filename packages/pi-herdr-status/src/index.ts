@@ -55,7 +55,8 @@ export function clearMetadata(
 
 /**
  * Formats a model object and optional thinking level into a concise display label.
- * Example: "anthropic/claude-3-7-sonnet (high)" or "anthropic/claude-3-7-sonnet"
+ * Provider prefix is stripped when present.
+ * Example: "claude-3-7-sonnet (high)" or "claude-3-7-sonnet"
  */
 export function formatModelLabel(
 	model?: {
@@ -67,14 +68,13 @@ export function formatModelLabel(
 ): string {
 	if (!model) return "";
 	let baseLabel = "";
-	if (model.provider && model.id) {
-		if (model.id.startsWith(`${model.provider}/`)) {
-			baseLabel = model.id;
-		} else {
-			baseLabel = `${model.provider}/${model.id}`;
-		}
+	if (model.id) {
+		// Strip "provider/" prefix when the id embeds it
+		baseLabel = model.provider && model.id.startsWith(`${model.provider}/`)
+			? model.id.slice(model.provider.length + 1)
+			: model.id;
 	} else {
-		baseLabel = model.id || model.name || "";
+		baseLabel = model.name || "";
 	}
 
 	if (!baseLabel) return "";

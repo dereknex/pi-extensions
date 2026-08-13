@@ -5,27 +5,29 @@ import loadExtension from "../src/index.ts";
 // Test 1: formatModelLabel helper without thinking level
 assert.equal(
 	formatModelLabel({ provider: "anthropic", id: "claude-3-7-sonnet" }),
-	"anthropic/claude-3-7-sonnet",
+	"claude-3-7-sonnet",
 );
 
 assert.equal(
 	formatModelLabel({ provider: "anthropic", id: "anthropic/claude-3-7-sonnet" }),
-	"anthropic/claude-3-7-sonnet",
+	"claude-3-7-sonnet",
 );
 
 assert.equal(formatModelLabel({ id: "gpt-4o" }), "gpt-4o");
+
+assert.equal(formatModelLabel({ name: "Custom Model" }), "Custom Model");
 
 assert.equal(formatModelLabel(undefined), "");
 
 // Test 2: formatModelLabel helper with thinking level
 assert.equal(
 	formatModelLabel({ provider: "anthropic", id: "claude-3-7-sonnet" }, "high"),
-	"anthropic/claude-3-7-sonnet (high)",
+	"claude-3-7-sonnet (high)",
 );
 
 assert.equal(
 	formatModelLabel({ provider: "anthropic", id: "claude-3-7-sonnet" }, "off"),
-	"anthropic/claude-3-7-sonnet",
+	"claude-3-7-sonnet",
 );
 
 // Test 3: DEFAULT_SOURCE and DEFAULT_TOKEN_NAME constants
