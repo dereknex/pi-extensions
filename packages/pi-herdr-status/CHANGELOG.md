@@ -1,5 +1,11 @@
 # pi-herdr-status
 
+## 0.1.1
+
+### Patch Changes
+
+- 901491b: Filter out model and thinking level updates triggered by subagents, preserving the main session's selected model in Herdr sidebar metadata.
+
 ## 0.1.0
 
 ### Minor Changes
