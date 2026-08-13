@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { formatModelLabel, DEFAULT_SOURCE, DEFAULT_TOKEN_NAME } from "../src/index.ts";
+import { formatModelLabel, isSubagent, DEFAULT_SOURCE, DEFAULT_TOKEN_NAME } from "../src/index.ts";
 import loadExtension from "../src/index.ts";
 
 // Test 1: formatModelLabel helper without thinking level
@@ -97,6 +97,69 @@ assert.equal(DEFAULT_TOKEN_NAME, "model_info");
 	};
 
 	await handlers["session_start"]({ type: "session_start", reason: "startup" }, mockCtx);
+
+	delete process.env.HERDR_PANE_ID;
+}
+
+// Test 7: isSubagent detection via environment variables
+{
+	assert.equal(isSubagent(), false);
+
+	process.env.PI_SUBAGENT = "true";
+	assert.equal(isSubagent(), true);
+	delete process.env.PI_SUBAGENT;
+
+	process.env.SUBAGENT = "1";
+	assert.equal(isSubagent(), true);
+	delete process.env.SUBAGENT;
+}
+
+// Test 8: isSubagent detection via ctx.sessionManager.getHeader() parentSession
+{
+	const mainCtx = {
+		sessionManager: {
+			getHeader() {
+				return { type: "session", id: "s1", cwd: "/", timestamp: "" };
+			},
+		},
+	};
+	assert.equal(isSubagent(mainCtx), false);
+
+	const childCtx = {
+		sessionManager: {
+			getHeader() {
+				return { type: "session", id: "s2", cwd: "/", timestamp: "", parentSession: "/path/to/parent.jsonl" };
+			},
+		},
+	};
+	assert.equal(isSubagent(childCtx), true);
+}
+
+// Test 9: Subagent events are ignored during session_start and model_select
+{
+	process.env.HERDR_PANE_ID = "w1:p1";
+
+	const handlers = {};
+	const mockPi = {
+		on(event, fn) {
+			handlers[event] = fn;
+		},
+	};
+
+	loadExtension(mockPi);
+
+	const subagentCtx = {
+		model: { provider: "openai", id: "subagent-model" },
+		sessionManager: {
+			getHeader() {
+				return { type: "session", id: "sub1", cwd: "/", timestamp: "", parentSession: "parent.jsonl" };
+			},
+		},
+	};
+
+	// Event from subagent should not throw and should be ignored
+	await handlers["session_start"]({ type: "session_start", reason: "startup" }, subagentCtx);
+	await handlers["model_select"]({ type: "model_select", model: { provider: "openai", id: "subagent-model" } }, subagentCtx);
 
 	delete process.env.HERDR_PANE_ID;
 }

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 /**
  * ExtensionAPI type extension for getThinkingLevel if missing in base types.
@@ -13,6 +13,31 @@ type ExtendedExtensionAPI = ExtensionAPI & {
  */
 export const DEFAULT_SOURCE = "pi-model";
 export const DEFAULT_TOKEN_NAME = "model_info";
+
+/**
+ * Checks if the current context or process is running as a subagent.
+ */
+export function isSubagent(ctx?: ExtensionContext): boolean {
+	if (
+		process.env.PI_SUBAGENT === "true" ||
+		process.env.PI_SUBAGENT === "1" ||
+		process.env.PI_IS_SUBAGENT === "true" ||
+		process.env.PI_IS_SUBAGENT === "1" ||
+		process.env.SUBAGENT === "true" ||
+		process.env.SUBAGENT === "1"
+	) {
+		return true;
+	}
+
+	if (ctx?.sessionManager) {
+		const header = ctx.sessionManager.getHeader();
+		if (header && "parentSession" in header && Boolean(header.parentSession)) {
+			return true;
+		}
+	}
+
+	return false;
+}
 
 /**
  * Safely reports metadata token to Herdr sidebar agents panel via `herdr` CLI.
@@ -90,8 +115,8 @@ export default function (pi: ExtensionAPI): void {
 	const socketPath = process.env.HERDR_SOCKET_PATH;
 	const paneId = process.env.HERDR_PANE_ID;
 
-	// Exit early if not running inside Herdr
-	if (!socketPath && !paneId) {
+	// Exit early if not running inside Herdr or running as a subagent process
+	if ((!socketPath && !paneId) || isSubagent()) {
 		return;
 	}
 
@@ -107,6 +132,7 @@ export default function (pi: ExtensionAPI): void {
 
 	// Listen for session start (notifies default model on pi startup / reload / resume)
 	pi.on("session_start", async (_event, ctx) => {
+		if (isSubagent(ctx)) return;
 		if (ctx.model) {
 			currentModel = ctx.model;
 		}
@@ -120,6 +146,7 @@ export default function (pi: ExtensionAPI): void {
 
 	// Listen for model selection (fires on model switch)
 	pi.on("model_select", async (event, ctx) => {
+		if (isSubagent(ctx)) return;
 		currentModel = event.model;
 		if (ctx?.thinkingLevel !== undefined) {
 			currentThinkingLevel = ctx.thinkingLevel;
@@ -130,13 +157,15 @@ export default function (pi: ExtensionAPI): void {
 	});
 
 	// Listen for thinking level changes
-	pi.on("thinking_level_select", async (event) => {
+	pi.on("thinking_level_select", async (event, ctx) => {
+		if (isSubagent(ctx)) return;
 		currentThinkingLevel = event.level;
 		updateStatus();
 	});
 
 	// Clean up metadata when session shuts down
-	pi.on("session_shutdown", async () => {
+	pi.on("session_shutdown", async (_event, ctx) => {
+		if (isSubagent(ctx)) return;
 		clearMetadata(paneId);
 	});
 }
