@@ -1,6 +1,28 @@
 import assert from "node:assert/strict";
-import { formatModelLabel, isSubagent, DEFAULT_SOURCE, DEFAULT_TOKEN_NAME } from "../src/index.ts";
-import loadExtension from "../src/index.ts";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import ts from "typescript";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const srcTsPath = path.resolve(__dirname, "../src/index.ts");
+const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-herdr-status-test-"));
+const compiledJsPath = path.join(tempDir, "index.js");
+
+const tsSource = fs.readFileSync(srcTsPath, "utf8");
+const { outputText } = ts.transpileModule(tsSource, {
+	compilerOptions: {
+		module: ts.ModuleKind.ESNext,
+		target: ts.ScriptTarget.ES2022,
+	},
+});
+fs.writeFileSync(compiledJsPath, outputText, "utf8");
+
+const { formatModelLabel, isSubagent, DEFAULT_SOURCE, DEFAULT_TOKEN_NAME, default: loadExtension } =
+	await import(pathToFileURL(compiledJsPath).href);
+
+fs.rmSync(tempDir, { recursive: true, force: true });
 
 // Test 1: formatModelLabel helper without thinking level
 assert.equal(
