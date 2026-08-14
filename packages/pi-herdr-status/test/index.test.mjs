@@ -19,7 +19,7 @@ const { outputText } = ts.transpileModule(tsSource, {
 });
 fs.writeFileSync(compiledJsPath, outputText, "utf8");
 
-const { formatModelLabel, isSubagent, DEFAULT_SOURCE, DEFAULT_TOKEN_NAME, default: loadExtension } =
+const { formatModelLabel, isSubagent, _setExecFileImplForTest, DEFAULT_SOURCE, DEFAULT_TOKEN_NAME, default: loadExtension } =
 	await import(pathToFileURL(compiledJsPath).href);
 
 fs.rmSync(tempDir, { recursive: true, force: true });
@@ -143,6 +143,9 @@ assert.equal(DEFAULT_TOKEN_NAME, "model_info");
 			getHeader() {
 				return { type: "session", id: "s1", cwd: "/", timestamp: "" };
 			},
+			getSessionFile() {
+				return "/sessions/s1.jsonl";
+			},
 		},
 	};
 	assert.equal(isSubagent(mainCtx), false);
@@ -152,9 +155,39 @@ assert.equal(DEFAULT_TOKEN_NAME, "model_info");
 			getHeader() {
 				return { type: "session", id: "s2", cwd: "/", timestamp: "", parentSession: "/path/to/parent.jsonl" };
 			},
+			getSessionFile() {
+				return "/sessions/s2.jsonl";
+			},
 		},
 	};
 	assert.equal(isSubagent(childCtx), true);
+}
+
+// Test 8b: isSubagent detects in-memory subagent sessions (no parentSession, no session file)
+{
+	const inMemorySubagentCtx = {
+		sessionManager: {
+			getHeader() {
+				return { type: "session", id: "sub1", cwd: "/", timestamp: "" };
+			},
+			getSessionFile() {
+				return undefined;
+			},
+		},
+	};
+	assert.equal(isSubagent(inMemorySubagentCtx), true);
+}
+
+// Test 8c: isSubagent is defensive when sessionManager lacks getSessionFile
+{
+	const bareCtx = {
+		sessionManager: {
+			getHeader() {
+				return { type: "session", id: "s3", cwd: "/", timestamp: "" };
+			},
+		},
+	};
+	assert.equal(isSubagent(bareCtx), true);
 }
 
 // Test 9: Subagent events are ignored during session_start and model_select
@@ -183,6 +216,77 @@ assert.equal(DEFAULT_TOKEN_NAME, "model_info");
 	await handlers["session_start"]({ type: "session_start", reason: "startup" }, subagentCtx);
 	await handlers["model_select"]({ type: "model_select", model: { provider: "openai", id: "subagent-model" } }, subagentCtx);
 
+	delete process.env.HERDR_PANE_ID;
+}
+
+// Test 10: herdr CLI invocations are serialized FIFO
+{
+	const recorded = [];
+	let delay = 0;
+	_setExecFileImplForTest((command, args, callback) => {
+		// First call completes slowly, second would overtake it without a queue.
+		const d = delay;
+		delay += 30;
+		setTimeout(() => {
+			recorded.push(args);
+			callback(null);
+		}, d);
+	});
+
+	const { reportMetadata, clearMetadata } = await import(pathToFileURL(compiledJsPath).href);
+	reportMetadata("claude-3-7-sonnet", "w1:p1");
+	reportMetadata("gpt-4o", "w1:p1");
+	clearMetadata("w1:p1");
+	await new Promise((resolve) => setTimeout(resolve, 150));
+
+	assert.equal(recorded.length, 3);
+	assert.ok(recorded[0].join(" ").includes("model_info=claude-3-7-sonnet"));
+	assert.ok(recorded[1].join(" ").includes("model_info=gpt-4o"));
+	assert.ok(recorded[2].join(" ").includes("--clear-token"));
+
+	_setExecFileImplForTest();
+}
+
+// Test 11: session_shutdown only clears metadata on real quit
+{
+	process.env.HERDR_PANE_ID = "w1:p1";
+
+	const recorded = [];
+	_setExecFileImplForTest((command, args, callback) => {
+		recorded.push(args);
+		callback(null);
+	});
+
+	const handlers = {};
+	const mockPi = {
+		on(event, fn) {
+			handlers[event] = fn;
+		},
+	};
+
+	loadExtension(mockPi);
+
+	const ctx = {
+		sessionManager: {
+			getHeader() {
+				return { type: "session", id: "s1", cwd: "/", timestamp: "" };
+			},
+			getSessionFile() {
+				return "/sessions/s1.jsonl";
+			},
+		},
+	};
+
+	await handlers["session_shutdown"]({ type: "session_shutdown", reason: "new" }, ctx);
+	await handlers["session_shutdown"]({ type: "session_shutdown", reason: "resume" }, ctx);
+	await handlers["session_shutdown"]({ type: "session_shutdown", reason: "reload" }, ctx);
+	assert.equal(recorded.length, 0, "session switches must not clear metadata");
+
+	await handlers["session_shutdown"]({ type: "session_shutdown", reason: "quit" }, ctx);
+	assert.equal(recorded.length, 1, "quit must clear metadata once");
+	assert.ok(recorded[0].join(" ").includes("--clear-token"));
+
+	_setExecFileImplForTest();
 	delete process.env.HERDR_PANE_ID;
 }
 

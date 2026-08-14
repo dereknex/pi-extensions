@@ -2,6 +2,35 @@ import { execFile } from "node:child_process";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 /**
+ * FIFO queue for herdr CLI invocations. Concurrent `execFile` calls are separate
+ * processes with no ordering guarantee, so a `clear-token` racing a later
+ * `report-metadata` could land last and delete model_info. Serializing keeps
+ * updates in the order they were issued.
+ */
+let metadataQueue: Promise<void> = Promise.resolve();
+
+let execFileImpl: typeof execFile = execFile;
+
+/**
+ * Test hook: replace the herdr CLI exec function to observe invocations.
+ * Resets the metadata queue so tests start from a clean slate.
+ */
+export function _setExecFileImplForTest(fn?: typeof execFile): void {
+	execFileImpl = fn ?? execFile;
+	metadataQueue = Promise.resolve();
+}
+
+/** Runs a herdr CLI invocation serially (FIFO). */
+function runHerdrSerially(args: string[]): void {
+	metadataQueue = metadataQueue.then(
+		() =>
+			new Promise<void>((resolve) => {
+				execFileImpl("herdr", args, () => resolve());
+			}),
+	);
+}
+
+/**
  * ExtensionAPI type extension for getThinkingLevel if missing in base types.
  */
 type ExtendedExtensionAPI = ExtensionAPI & {
@@ -34,6 +63,14 @@ export function isSubagent(ctx?: ExtensionContext): boolean {
 		if (header && "parentSession" in header && Boolean(header.parentSession)) {
 			return true;
 		}
+		// pi-subagents creates subagent sessions in-memory by default, and those
+		// have no parentSession in the header. The top-level persisted session
+		// always has a session file, so its absence means we are not the main
+		// session (or pi runs ephemeral, in which case reporting is skipped).
+		const getSessionFile = ctx.sessionManager.getSessionFile;
+		if (typeof getSessionFile !== "function" || !getSessionFile()) {
+			return true;
+		}
 	}
 
 	return false;
@@ -54,9 +91,7 @@ export function reportMetadata(
 	}
 	args.push("--source", source, "--token", `${tokenName}=${statusText}`);
 
-	execFile("herdr", args, () => {
-		// Silently handle execution results (e.g. non-zero exit when not in herdr)
-	});
+	runHerdrSerially(args);
 }
 
 /**
@@ -73,9 +108,7 @@ export function clearMetadata(
 	}
 	args.push("--source", source, "--clear-token", tokenName);
 
-	execFile("herdr", args, () => {
-		// Silently handle execution results
-	});
+	runHerdrSerially(args);
 }
 
 /**
@@ -163,9 +196,12 @@ export default function (pi: ExtensionAPI): void {
 		updateStatus();
 	});
 
-	// Clean up metadata when session shuts down
-	pi.on("session_shutdown", async (_event, ctx) => {
+	// Clean up metadata only on a real quit. Session switches (new/resume/fork/reload)
+	// are immediately followed by session_start, whose report would race with a clear
+	// here and could leave model_info deleted.
+	pi.on("session_shutdown", async (event, ctx) => {
 		if (isSubagent(ctx)) return;
+		if (event.reason !== "quit") return;
 		clearMetadata(paneId);
 	});
 }
