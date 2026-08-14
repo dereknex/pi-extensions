@@ -67,8 +67,12 @@ export function isSubagent(ctx?: ExtensionContext): boolean {
 		// have no parentSession in the header. The top-level persisted session
 		// always has a session file, so its absence means we are not the main
 		// session (or pi runs ephemeral, in which case reporting is skipped).
-		const getSessionFile = ctx.sessionManager.getSessionFile;
-		if (typeof getSessionFile !== "function" || !getSessionFile()) {
+		// Call as a method: SessionManager#getSessionFile reads `this.sessionFile`,
+		// so detaching it would lose the receiver and throw.
+		if (
+			typeof ctx.sessionManager.getSessionFile !== "function" ||
+			!ctx.sessionManager.getSessionFile()
+		) {
 			return true;
 		}
 	}

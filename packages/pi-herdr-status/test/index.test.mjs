@@ -137,14 +137,17 @@ assert.equal(DEFAULT_TOKEN_NAME, "model_info");
 }
 
 // Test 8: isSubagent detection via ctx.sessionManager.getHeader() parentSession
+// Mocks mirror the real SessionManager shape: getSessionFile reads `this.sessionFile`,
+// so detached calls (lost receiver) throw instead of silently returning a value.
 {
 	const mainCtx = {
 		sessionManager: {
+			sessionFile: "/sessions/s1.jsonl",
 			getHeader() {
 				return { type: "session", id: "s1", cwd: "/", timestamp: "" };
 			},
 			getSessionFile() {
-				return "/sessions/s1.jsonl";
+				return this.sessionFile;
 			},
 		},
 	};
@@ -152,11 +155,12 @@ assert.equal(DEFAULT_TOKEN_NAME, "model_info");
 
 	const childCtx = {
 		sessionManager: {
+			sessionFile: "/sessions/s2.jsonl",
 			getHeader() {
 				return { type: "session", id: "s2", cwd: "/", timestamp: "", parentSession: "/path/to/parent.jsonl" };
 			},
 			getSessionFile() {
-				return "/sessions/s2.jsonl";
+				return this.sessionFile;
 			},
 		},
 	};
@@ -167,11 +171,12 @@ assert.equal(DEFAULT_TOKEN_NAME, "model_info");
 {
 	const inMemorySubagentCtx = {
 		sessionManager: {
+			sessionFile: undefined,
 			getHeader() {
 				return { type: "session", id: "sub1", cwd: "/", timestamp: "" };
 			},
 			getSessionFile() {
-				return undefined;
+				return this.sessionFile;
 			},
 		},
 	};
@@ -268,11 +273,12 @@ assert.equal(DEFAULT_TOKEN_NAME, "model_info");
 
 	const ctx = {
 		sessionManager: {
+			sessionFile: "/sessions/s1.jsonl",
 			getHeader() {
 				return { type: "session", id: "s1", cwd: "/", timestamp: "" };
 			},
 			getSessionFile() {
-				return "/sessions/s1.jsonl";
+				return this.sessionFile;
 			},
 		},
 	};
