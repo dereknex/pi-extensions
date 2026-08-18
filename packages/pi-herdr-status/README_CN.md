@@ -7,6 +7,7 @@
 ## 特性
 
 - **模型实时同步**：在启动、会话恢复、执行 `/model` 或快捷键 `Ctrl+P` 切换模型时，实时更新 Herdr 侧边栏状态。
+- **状态实时上报**：自动同步 Agent 生命周期状态（执行中 `working`、等待交互确认 `blocked`、空闲 `idle`）至 Herdr 侧边栏。
 - **精准多面板支持**：通过 `HERDR_PANE_ID` 区分不同的分屏面板。
 - **命名空间隔离**：使用 `--source pi-model` 及自定义 token `--token model_info`，与其他扩展完全隔离。
 - **自动清理**：会话关闭时自动清除对应面板的 `model_info` token。

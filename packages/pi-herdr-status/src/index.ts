@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 
 /**
  * FIFO queue for herdr CLI invocations. Concurrent `execFile` calls are separate
@@ -18,6 +18,11 @@ let execFileImpl: typeof execFile = execFile;
 export function _setExecFileImplForTest(fn?: typeof execFile): void {
 	execFileImpl = fn ?? execFile;
 	metadataQueue = Promise.resolve();
+}
+
+/** Test hook: waits until all queued Herdr CLI invocations complete. */
+export function _waitForMetadataQueueForTest(): Promise<void> {
+	return metadataQueue;
 }
 
 /** Runs a herdr CLI invocation serially (FIFO). */
@@ -81,6 +86,11 @@ export function isSubagent(ctx?: ExtensionContext): boolean {
 }
 
 /**
+ * Agent lifecycle state recognized by Herdr CLI.
+ */
+export type HerdrAgentState = "idle" | "working" | "blocked" | "unknown";
+
+/**
  * Safely reports metadata token to Herdr sidebar agents panel via `herdr` CLI.
  */
 export function reportMetadata(
@@ -113,6 +123,57 @@ export function clearMetadata(
 	args.push("--source", source, "--clear-token", tokenName);
 
 	runHerdrSerially(args);
+}
+
+/**
+ * Reports agent lifecycle state (e.g. working, blocked/waiting confirmation, idle) to Herdr.
+ */
+export function reportAgentState(
+	state: HerdrAgentState,
+	message?: string,
+	agentLabel = "pi",
+	paneId?: string,
+	source = DEFAULT_SOURCE,
+): void {
+	const args = ["pane", "report-agent", "--source", source, "--agent", agentLabel || "pi", "--state", state];
+	if (message) {
+		args.push("--message", message);
+	}
+	if (paneId) {
+		args.push(paneId);
+	}
+
+	runHerdrSerially(args);
+}
+
+/** Extension UI contexts already intercepted by this module instance. */
+const patchedUIs = new WeakSet<ExtensionUIContext>();
+
+/** Intercepts dialogs so callers can track when user interaction starts and ends. */
+export function patchUI(
+	ui: ExtensionUIContext,
+	onDialogOpen: (title: string) => void,
+	onDialogClose: () => void,
+): void {
+	if (patchedUIs.has(ui)) return;
+	patchedUIs.add(ui);
+
+	const wrapDialog = <TArgs extends unknown[], TResult>(
+		dialog: (...args: TArgs) => Promise<TResult>,
+	) => async (...args: TArgs): Promise<TResult> => {
+		const title = typeof args[0] === "string" ? args[0] : "";
+		onDialogOpen(title);
+		try {
+			return await dialog(...args);
+		} finally {
+			onDialogClose();
+		}
+	};
+
+	ui.confirm = wrapDialog(ui.confirm.bind(ui));
+	ui.select = wrapDialog(ui.select.bind(ui));
+	ui.input = wrapDialog(ui.input.bind(ui));
+	ui.editor = wrapDialog(ui.editor.bind(ui));
 }
 
 /**
@@ -159,6 +220,27 @@ export default function (pi: ExtensionAPI): void {
 
 	let currentModel: { provider?: string; id?: string; name?: string } | undefined;
 	let currentThinkingLevel: string | undefined;
+	let lifecycleState: HerdrAgentState = "idle";
+	let activeDialogs = 0;
+
+	const publishState = (state: HerdrAgentState, message?: string) => {
+		reportAgentState(state, message, "pi", paneId);
+	};
+
+	const setLifecycleState = (state: HerdrAgentState) => {
+		lifecycleState = state;
+		if (activeDialogs === 0) publishState(state);
+	};
+
+	const onDialogOpen = (title: string) => {
+		activeDialogs += 1;
+		publishState("blocked", title ? `Waiting for user: ${title}` : "Waiting for user");
+	};
+
+	const onDialogClose = () => {
+		activeDialogs -= 1;
+		if (activeDialogs === 0) publishState(lifecycleState);
+	};
 
 	const updateStatus = () => {
 		const label = formatModelLabel(currentModel, currentThinkingLevel);
@@ -167,9 +249,16 @@ export default function (pi: ExtensionAPI): void {
 		}
 	};
 
+	const ensurePatched = (ctx?: ExtensionContext) => {
+		if (ctx?.hasUI && !isSubagent(ctx)) {
+			patchUI(ctx.ui, onDialogOpen, onDialogClose);
+		}
+	};
+
 	// Listen for session start (notifies default model on pi startup / reload / resume)
 	pi.on("session_start", async (_event, ctx) => {
 		if (isSubagent(ctx)) return;
+		ensurePatched(ctx);
 		if (ctx.model) {
 			currentModel = ctx.model;
 		}
@@ -184,6 +273,7 @@ export default function (pi: ExtensionAPI): void {
 	// Listen for model selection (fires on model switch)
 	pi.on("model_select", async (event, ctx) => {
 		if (isSubagent(ctx)) return;
+		ensurePatched(ctx);
 		currentModel = event.model;
 		if (ctx?.thinkingLevel !== undefined) {
 			currentThinkingLevel = ctx.thinkingLevel;
@@ -196,8 +286,28 @@ export default function (pi: ExtensionAPI): void {
 	// Listen for thinking level changes
 	pi.on("thinking_level_select", async (event, ctx) => {
 		if (isSubagent(ctx)) return;
+		ensurePatched(ctx);
 		currentThinkingLevel = event.level;
 		updateStatus();
+	});
+
+	// Listen for agent lifecycle events for state updates
+	pi.on("agent_start", async (_event, ctx) => {
+		if (isSubagent(ctx)) return;
+		ensurePatched(ctx);
+		setLifecycleState("working");
+	});
+
+	pi.on("tool_execution_start", async (_event, ctx) => {
+		if (isSubagent(ctx)) return;
+		ensurePatched(ctx);
+		setLifecycleState("working");
+	});
+
+	pi.on("agent_settled", async (_event, ctx) => {
+		if (isSubagent(ctx)) return;
+		ensurePatched(ctx);
+		setLifecycleState("idle");
 	});
 
 	// Clean up metadata only on a real quit. Session switches (new/resume/fork/reload)
@@ -207,5 +317,6 @@ export default function (pi: ExtensionAPI): void {
 		if (isSubagent(ctx)) return;
 		if (event.reason !== "quit") return;
 		clearMetadata(paneId);
+		publishState("idle");
 	});
 }

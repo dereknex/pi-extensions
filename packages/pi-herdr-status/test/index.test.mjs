@@ -19,8 +19,17 @@ const { outputText } = ts.transpileModule(tsSource, {
 });
 fs.writeFileSync(compiledJsPath, outputText, "utf8");
 
-const { formatModelLabel, isSubagent, _setExecFileImplForTest, DEFAULT_SOURCE, DEFAULT_TOKEN_NAME, default: loadExtension } =
-	await import(pathToFileURL(compiledJsPath).href);
+const {
+	formatModelLabel,
+	isSubagent,
+	_setExecFileImplForTest,
+	_waitForMetadataQueueForTest,
+	DEFAULT_SOURCE,
+	DEFAULT_TOKEN_NAME,
+	reportAgentState,
+	patchUI,
+	default: loadExtension,
+} = await import(pathToFileURL(compiledJsPath).href);
 
 fs.rmSync(tempDir, { recursive: true, force: true });
 
@@ -229,20 +238,19 @@ assert.equal(DEFAULT_TOKEN_NAME, "model_info");
 	const recorded = [];
 	let delay = 0;
 	_setExecFileImplForTest((command, args, callback) => {
-		// First call completes slowly, second would overtake it without a queue.
-		const d = delay;
+		const currentDelay = delay;
 		delay += 30;
 		setTimeout(() => {
 			recorded.push(args);
 			callback(null);
-		}, d);
+		}, currentDelay);
 	});
 
 	const { reportMetadata, clearMetadata } = await import(pathToFileURL(compiledJsPath).href);
 	reportMetadata("claude-3-7-sonnet", "w1:p1");
 	reportMetadata("gpt-4o", "w1:p1");
 	clearMetadata("w1:p1");
-	await new Promise((resolve) => setTimeout(resolve, 150));
+	await _waitForMetadataQueueForTest();
 
 	assert.equal(recorded.length, 3);
 	assert.ok(recorded[0].join(" ").includes("model_info=claude-3-7-sonnet"));
@@ -252,7 +260,7 @@ assert.equal(DEFAULT_TOKEN_NAME, "model_info");
 	_setExecFileImplForTest();
 }
 
-// Test 11: session_shutdown only clears metadata on real quit
+// Test 11: session_shutdown only clears metadata and updates state on real quit
 {
 	process.env.HERDR_PANE_ID = "w1:p1";
 
@@ -263,13 +271,11 @@ assert.equal(DEFAULT_TOKEN_NAME, "model_info");
 	});
 
 	const handlers = {};
-	const mockPi = {
+	loadExtension({
 		on(event, fn) {
 			handlers[event] = fn;
 		},
-	};
-
-	loadExtension(mockPi);
+	});
 
 	const ctx = {
 		sessionManager: {
@@ -283,14 +289,251 @@ assert.equal(DEFAULT_TOKEN_NAME, "model_info");
 		},
 	};
 
-	await handlers["session_shutdown"]({ type: "session_shutdown", reason: "new" }, ctx);
-	await handlers["session_shutdown"]({ type: "session_shutdown", reason: "resume" }, ctx);
-	await handlers["session_shutdown"]({ type: "session_shutdown", reason: "reload" }, ctx);
+	await handlers.session_shutdown({ type: "session_shutdown", reason: "new" }, ctx);
+	await handlers.session_shutdown({ type: "session_shutdown", reason: "resume" }, ctx);
+	await handlers.session_shutdown({ type: "session_shutdown", reason: "reload" }, ctx);
 	assert.equal(recorded.length, 0, "session switches must not clear metadata");
 
-	await handlers["session_shutdown"]({ type: "session_shutdown", reason: "quit" }, ctx);
-	assert.equal(recorded.length, 1, "quit must clear metadata once");
+	await handlers.session_shutdown({ type: "session_shutdown", reason: "quit" }, ctx);
+	await _waitForMetadataQueueForTest();
+	assert.equal(recorded.length, 2, "quit must clear metadata and report idle state");
 	assert.ok(recorded[0].join(" ").includes("--clear-token"));
+	assert.ok(recorded[1].join(" ").includes("--agent pi --state idle"));
+
+	_setExecFileImplForTest();
+	delete process.env.HERDR_PANE_ID;
+}
+
+// Test 12: reportAgentState formats CLI arguments correctly
+{
+	const recorded = [];
+	_setExecFileImplForTest((command, args, callback) => {
+		recorded.push(args);
+		callback(null);
+	});
+
+	reportAgentState("blocked", "Waiting for user: bash", undefined, "w1:p1");
+	await _waitForMetadataQueueForTest();
+
+	assert.equal(recorded.length, 1);
+	const argStr = recorded[0].join(" ");
+	assert.ok(argStr.includes("report-agent"));
+	assert.ok(argStr.includes("--source pi-model"));
+	assert.ok(argStr.includes("--agent pi"));
+	assert.ok(argStr.includes("--state blocked"));
+	assert.ok(argStr.includes("--message Waiting for user: bash"));
+	assert.ok(argStr.includes("w1:p1"));
+
+	_setExecFileImplForTest();
+}
+
+// Test 13: lifecycle events report against the stable pi agent identity
+{
+	process.env.HERDR_PANE_ID = "w1:p1";
+
+	const recorded = [];
+	_setExecFileImplForTest((command, args, callback) => {
+		recorded.push(args);
+		callback(null);
+	});
+
+	const handlers = {};
+	loadExtension({
+		on(event, fn) {
+			handlers[event] = fn;
+		},
+	});
+
+	const ctx = {
+		hasUI: false,
+		model: { provider: "anthropic", id: "claude-3-7-sonnet" },
+		sessionManager: {
+			sessionFile: "/sessions/s1.jsonl",
+			getHeader() {
+				return { type: "session", id: "s1", cwd: "/", timestamp: "" };
+			},
+			getSessionFile() {
+				return this.sessionFile;
+			},
+		},
+	};
+
+	await handlers.session_start({ type: "session_start", reason: "startup" }, ctx);
+	await _waitForMetadataQueueForTest();
+	recorded.length = 0;
+
+	await handlers.agent_start({ type: "agent_start" }, ctx);
+	await handlers.tool_execution_start({ type: "tool_execution_start", toolName: "edit" }, ctx);
+	await handlers.agent_settled({ type: "agent_settled" }, ctx);
+	await _waitForMetadataQueueForTest();
+
+	assert.deepEqual(recorded.map((args) => args[args.indexOf("--state") + 1]), ["working", "working", "idle"]);
+	assert.ok(recorded.every((args) => args.join(" ").includes("--agent pi")));
+	assert.equal(handlers.tool_call, undefined, "ordinary tool calls must not be reported as blocked");
+
+	_setExecFileImplForTest();
+	delete process.env.HERDR_PANE_ID;
+}
+
+// Test 14: patchUI preserves all dialog methods and closes on rejection
+{
+	const events = [];
+	const ui = {
+		async confirm() {
+			return true;
+		},
+		async select(_title, options) {
+			return options[0];
+		},
+		async input() {
+			return "typed";
+		},
+		async editor() {
+			throw new Error("cancelled");
+		},
+	};
+
+	patchUI(ui, (title) => events.push(`open:${title}`), () => events.push("close"));
+	patchUI(ui, () => events.push("patched twice"), () => events.push("patched twice"));
+
+	assert.equal(await ui.confirm("Confirm", "message"), true);
+	assert.equal(await ui.select("Select", ["first"]), "first");
+	assert.equal(await ui.input("Input"), "typed");
+	await assert.rejects(ui.editor("Editor"), /cancelled/);
+	assert.deepEqual(events, [
+		"open:Confirm", "close",
+		"open:Select", "close",
+		"open:Input", "close",
+		"open:Editor", "close",
+	]);
+}
+
+function deferred() {
+	let resolve;
+	const promise = new Promise((done) => {
+		resolve = done;
+	});
+	return { promise, resolve };
+}
+
+function createDialogUI(confirmDialog = deferred(), inputDialog = deferred()) {
+	return {
+		confirmDialog,
+		inputDialog,
+		ui: {
+			confirm() {
+				return confirmDialog.promise;
+			},
+			async select(_title, options) {
+				return options[0];
+			},
+			input() {
+				return inputDialog.promise;
+			},
+			async editor(_title, prefill) {
+				return prefill;
+			},
+		},
+	};
+}
+
+function createMainSessionContext(ui, hasUI = true) {
+	return {
+		ui,
+		hasUI,
+		sessionManager: {
+			sessionFile: "/sessions/s1.jsonl",
+			getHeader() {
+				return { type: "session", id: "s1", cwd: "/", timestamp: "" };
+			},
+			getSessionFile() {
+				return this.sessionFile;
+			},
+		},
+	};
+}
+
+// Test 15: dialogs remain blocked until the final overlapping dialog closes
+{
+	process.env.HERDR_PANE_ID = "w1:p1";
+
+	const recorded = [];
+	_setExecFileImplForTest((command, args, callback) => {
+		recorded.push(args);
+		callback(null);
+	});
+
+	const handlers = {};
+	loadExtension({
+		on(event, fn) {
+			handlers[event] = fn;
+		},
+	});
+
+	const { ui, confirmDialog, inputDialog } = createDialogUI();
+	const ctx = createMainSessionContext(ui);
+	await handlers.session_start({ type: "session_start", reason: "startup" }, ctx);
+
+	const confirmPromise = ui.confirm("Confirm action", "message");
+	const inputPromise = ui.input("Enter value");
+	await _waitForMetadataQueueForTest();
+	assert.deepEqual(recorded.map((args) => args[args.indexOf("--state") + 1]), ["blocked", "blocked"]);
+	assert.ok(recorded.every((args) => args.join(" ").includes("--agent pi")));
+
+	await handlers.agent_start({ type: "agent_start" }, ctx);
+	await _waitForMetadataQueueForTest();
+	assert.equal(recorded.length, 2, "lifecycle changes must not overwrite an open dialog");
+
+	confirmDialog.resolve(true);
+	assert.equal(await confirmPromise, true);
+	await _waitForMetadataQueueForTest();
+	assert.equal(recorded.length, 2, "closing one dialog must keep the other blocked");
+
+	inputDialog.resolve("value");
+	assert.equal(await inputPromise, "value");
+	await _waitForMetadataQueueForTest();
+	assert.equal(recorded[2][recorded[2].indexOf("--state") + 1], "working");
+
+	await handlers.agent_settled({ type: "agent_settled" }, ctx);
+	await _waitForMetadataQueueForTest();
+	assert.equal(recorded[3][recorded[3].indexOf("--state") + 1], "idle");
+
+	const selectResult = await ui.select("Pick", ["one"]);
+	assert.equal(selectResult, "one");
+	await _waitForMetadataQueueForTest();
+	assert.deepEqual(recorded.slice(-2).map((args) => args[args.indexOf("--state") + 1]), ["blocked", "idle"]);
+
+	_setExecFileImplForTest();
+	delete process.env.HERDR_PANE_ID;
+}
+
+// Test 16: non-interactive contexts do not patch no-op dialogs
+{
+	process.env.HERDR_PANE_ID = "w1:p1";
+
+	const recorded = [];
+	_setExecFileImplForTest((command, args, callback) => {
+		recorded.push(args);
+		callback(null);
+	});
+
+	const handlers = {};
+	loadExtension({
+		on(event, fn) {
+			handlers[event] = fn;
+		},
+	});
+
+	const { ui, confirmDialog } = createDialogUI();
+	const ctx = createMainSessionContext(ui, false);
+	await handlers.session_start({ type: "session_start", reason: "startup" }, ctx);
+	const confirmPromise = ui.confirm("No UI", "message");
+	await _waitForMetadataQueueForTest();
+	assert.equal(recorded.length, 0);
+
+	confirmDialog.resolve(false);
+	assert.equal(await confirmPromise, false);
+	assert.equal(recorded.length, 0);
 
 	_setExecFileImplForTest();
 	delete process.env.HERDR_PANE_ID;
