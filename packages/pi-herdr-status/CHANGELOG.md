@@ -1,5 +1,11 @@
 # pi-herdr-status
 
+## 0.1.3
+
+### Patch Changes
+
+- 7fc7bb3: Add support for reporting Agent lifecycle state (`working`, `blocked` for waiting user confirmation, `idle`) to Herdr sidebar.
+
 ## 0.1.2
 
 ### Patch Changes
