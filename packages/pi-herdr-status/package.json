@@ -1,6 +1,6 @@
 {
   "name": "pi-herdr-status",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "Reports pi active model and status metadata to Herdr's sidebar agents panel without colliding with other extensions.",
   "type": "module",
   "license": "MIT",
