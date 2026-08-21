@@ -222,6 +222,9 @@ export default function (pi: ExtensionAPI): void {
 	let currentThinkingLevel: string | undefined;
 	let lifecycleState: HerdrAgentState = "idle";
 	let activeDialogs = 0;
+	const activeAttentions = new Set<string>();
+
+	const isBlocked = () => activeDialogs > 0 || activeAttentions.size > 0;
 
 	const publishState = (state: HerdrAgentState, message?: string) => {
 		reportAgentState(state, message, "pi", paneId);
@@ -229,7 +232,7 @@ export default function (pi: ExtensionAPI): void {
 
 	const setLifecycleState = (state: HerdrAgentState) => {
 		lifecycleState = state;
-		if (activeDialogs === 0) publishState(state);
+		if (!isBlocked()) publishState(state);
 	};
 
 	const onDialogOpen = (title: string) => {
@@ -239,7 +242,7 @@ export default function (pi: ExtensionAPI): void {
 
 	const onDialogClose = () => {
 		activeDialogs -= 1;
-		if (activeDialogs === 0) publishState(lifecycleState);
+		if (!isBlocked()) publishState(lifecycleState);
 	};
 
 	const updateStatus = () => {
@@ -310,12 +313,36 @@ export default function (pi: ExtensionAPI): void {
 		setLifecycleState("idle");
 	});
 
+	// Immune-Brain user-attention integration: track active attentions and
+	// map them onto the existing blocked/unblocked lifecycle.
+	pi.events.on("immune-brain:user-attention.v1", (data: unknown) => {
+		try {
+			if (!data || typeof data !== "object") return;
+			const evt = data as Record<string, unknown>;
+			if (typeof evt.active !== "boolean" || typeof evt.attention_id !== "string" || !evt.attention_id) return;
+
+			if (evt.active) {
+				if (activeAttentions.has(evt.attention_id)) return; // idempotent
+				activeAttentions.add(evt.attention_id);
+				const label = typeof evt.label === "string" && evt.label ? evt.label : "Immune-Brain";
+				publishState("blocked", `Waiting for user: ${label}`);
+			} else {
+				if (!activeAttentions.has(evt.attention_id)) return; // idempotent
+				activeAttentions.delete(evt.attention_id);
+				if (!isBlocked()) publishState(lifecycleState);
+			}
+		} catch {
+			// Malformed payload must not propagate to host
+		}
+	});
+
 	// Clean up metadata only on a real quit. Session switches (new/resume/fork/reload)
 	// are immediately followed by session_start, whose report would race with a clear
 	// here and could leave model_info deleted.
 	pi.on("session_shutdown", async (event, ctx) => {
 		if (isSubagent(ctx)) return;
 		if (event.reason !== "quit") return;
+		activeAttentions.clear();
 		clearMetadata(paneId);
 		publishState("idle");
 	});

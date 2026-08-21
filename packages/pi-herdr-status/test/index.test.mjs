@@ -65,6 +65,30 @@ assert.equal(
 assert.equal(DEFAULT_SOURCE, "pi-model");
 assert.equal(DEFAULT_TOKEN_NAME, "model_info");
 
+/** Creates a mock Pi ExtensionAPI with event bus support. */
+function createMockPi() {
+	const handlers = {};
+	const eventHandlers = {};
+	return {
+		handlers,
+		eventHandlers,
+		pi: {
+			on(event, fn) {
+				handlers[event] = fn;
+			},
+			events: {
+				on(channel, fn) {
+					eventHandlers[channel] = fn;
+					return () => { delete eventHandlers[channel]; };
+				},
+				emit(channel, data) {
+					if (eventHandlers[channel]) eventHandlers[channel](data);
+				},
+			},
+		},
+	};
+}
+
 // Test 4: Extension init when not in Herdr
 {
 	const originalSocket = process.env.HERDR_SOCKET_PATH;
@@ -72,12 +96,7 @@ assert.equal(DEFAULT_TOKEN_NAME, "model_info");
 	delete process.env.HERDR_SOCKET_PATH;
 	delete process.env.HERDR_PANE_ID;
 
-	const handlers = {};
-	const mockPi = {
-		on(event, fn) {
-			handlers[event] = fn;
-		},
-	};
+	const { pi: mockPi, handlers } = createMockPi();
 
 	loadExtension(mockPi);
 	assert.equal(Object.keys(handlers).length, 0);
@@ -90,21 +109,15 @@ assert.equal(DEFAULT_TOKEN_NAME, "model_info");
 {
 	process.env.HERDR_PANE_ID = "w1:p1";
 
-	const handlers = {};
-	const mockPi = {
-		on(event, fn) {
-			handlers[event] = fn;
-		},
-		getThinkingLevel() {
-			return "medium";
-		},
-	};
+	const { pi: mockPi, handlers, eventHandlers } = createMockPi();
+	mockPi.getThinkingLevel = () => "medium";
 
 	loadExtension(mockPi);
 	assert.ok(typeof handlers["session_start"] === "function");
 	assert.ok(typeof handlers["model_select"] === "function");
 	assert.ok(typeof handlers["thinking_level_select"] === "function");
 	assert.ok(typeof handlers["session_shutdown"] === "function");
+	assert.ok(typeof eventHandlers["immune-brain:user-attention.v1"] === "function");
 
 	delete process.env.HERDR_PANE_ID;
 }
@@ -113,12 +126,7 @@ assert.equal(DEFAULT_TOKEN_NAME, "model_info");
 {
 	process.env.HERDR_PANE_ID = "w1:p1";
 
-	const handlers = {};
-	const mockPi = {
-		on(event, fn) {
-			handlers[event] = fn;
-		},
-	};
+	const { pi: mockPi, handlers } = createMockPi();
 
 	loadExtension(mockPi);
 
@@ -208,12 +216,7 @@ assert.equal(DEFAULT_TOKEN_NAME, "model_info");
 {
 	process.env.HERDR_PANE_ID = "w1:p1";
 
-	const handlers = {};
-	const mockPi = {
-		on(event, fn) {
-			handlers[event] = fn;
-		},
-	};
+	const { pi: mockPi, handlers } = createMockPi();
 
 	loadExtension(mockPi);
 
@@ -270,12 +273,8 @@ assert.equal(DEFAULT_TOKEN_NAME, "model_info");
 		callback(null);
 	});
 
-	const handlers = {};
-	loadExtension({
-		on(event, fn) {
-			handlers[event] = fn;
-		},
-	});
+	const { pi: mockPi11, handlers } = createMockPi();
+	loadExtension(mockPi11);
 
 	const ctx = {
 		sessionManager: {
@@ -337,12 +336,8 @@ assert.equal(DEFAULT_TOKEN_NAME, "model_info");
 		callback(null);
 	});
 
-	const handlers = {};
-	loadExtension({
-		on(event, fn) {
-			handlers[event] = fn;
-		},
-	});
+	const { pi: mockPi13, handlers } = createMockPi();
+	loadExtension(mockPi13);
 
 	const ctx = {
 		hasUI: false,
@@ -463,12 +458,8 @@ function createMainSessionContext(ui, hasUI = true) {
 		callback(null);
 	});
 
-	const handlers = {};
-	loadExtension({
-		on(event, fn) {
-			handlers[event] = fn;
-		},
-	});
+	const { pi: mockPi15, handlers } = createMockPi();
+	loadExtension(mockPi15);
 
 	const { ui, confirmDialog, inputDialog } = createDialogUI();
 	const ctx = createMainSessionContext(ui);
@@ -517,12 +508,8 @@ function createMainSessionContext(ui, hasUI = true) {
 		callback(null);
 	});
 
-	const handlers = {};
-	loadExtension({
-		on(event, fn) {
-			handlers[event] = fn;
-		},
-	});
+	const { pi: mockPi16, handlers } = createMockPi();
+	loadExtension(mockPi16);
 
 	const { ui, confirmDialog } = createDialogUI();
 	const ctx = createMainSessionContext(ui, false);
@@ -539,4 +526,346 @@ function createMainSessionContext(ui, hasUI = true) {
 	delete process.env.HERDR_PANE_ID;
 }
 
-console.log("All pi-herdr-status tests passed!");
+console.log("All original pi-herdr-status tests passed!");
+
+// =============================================================================
+// Immune-Brain user-attention tests
+// =============================================================================
+
+/** Emits an attention event through the mock Pi event bus. */
+function emitAttention(pi, payload) {
+	pi.events.emit("immune-brain:user-attention.v1", payload);
+}
+
+// Test 17: Single attention open -> blocked, matching close -> unblocked
+{
+	process.env.HERDR_PANE_ID = "w1:p1";
+
+	const recorded = [];
+	_setExecFileImplForTest((command, args, callback) => {
+		recorded.push(args);
+		callback(null);
+	});
+
+	const { pi: mockPi17, handlers } = createMockPi();
+	loadExtension(mockPi17);
+
+	const ctx = createMainSessionContext(createDialogUI().ui);
+	await handlers.session_start({ type: "session_start", reason: "startup" }, ctx);
+	await _waitForMetadataQueueForTest();
+	recorded.length = 0;
+
+	emitAttention(mockPi17, { active: true, attention_id: "att-1", task_id: "t1", reason: "enrollment", label: "Approve enrollment" });
+	await _waitForMetadataQueueForTest();
+	assert.equal(recorded.length, 1);
+	assert.equal(recorded[0][recorded[0].indexOf("--state") + 1], "blocked");
+	assert.ok(recorded[0].join(" ").includes("Approve enrollment"));
+
+	emitAttention(mockPi17, { active: false, attention_id: "att-1", task_id: "t1", reason: "enrollment" });
+	await _waitForMetadataQueueForTest();
+	assert.equal(recorded.length, 2);
+	assert.equal(recorded[1][recorded[1].indexOf("--state") + 1], "idle");
+
+	_setExecFileImplForTest();
+	delete process.env.HERDR_PANE_ID;
+	console.log("Test 17 passed: single open/close");
+}
+
+// Test 18: Two concurrent attentions, closing one keeps blocked
+{
+	process.env.HERDR_PANE_ID = "w1:p1";
+
+	const recorded = [];
+	_setExecFileImplForTest((command, args, callback) => {
+		recorded.push(args);
+		callback(null);
+	});
+
+	const { pi: mockPi18, handlers } = createMockPi();
+	loadExtension(mockPi18);
+
+	const ctx = createMainSessionContext(createDialogUI().ui);
+	await handlers.session_start({ type: "session_start", reason: "startup" }, ctx);
+	await _waitForMetadataQueueForTest();
+	recorded.length = 0;
+
+	emitAttention(mockPi18, { active: true, attention_id: "att-a", task_id: "t1", reason: "enrollment" });
+	emitAttention(mockPi18, { active: true, attention_id: "att-b", task_id: "t2", reason: "review_authorization" });
+	await _waitForMetadataQueueForTest();
+	assert.equal(recorded.length, 2);
+	assert.ok(recorded.every((a) => a[a.indexOf("--state") + 1] === "blocked"));
+
+	// Close one
+	emitAttention(mockPi18, { active: false, attention_id: "att-a", task_id: "t1", reason: "enrollment" });
+	await _waitForMetadataQueueForTest();
+	// No unblock published because att-b still active
+	assert.equal(recorded.length, 2, "closing one of two attentions must not unblock");
+
+	// Close the other
+	emitAttention(mockPi18, { active: false, attention_id: "att-b", task_id: "t2", reason: "review_authorization" });
+	await _waitForMetadataQueueForTest();
+	assert.equal(recorded.length, 3);
+	assert.equal(recorded[2][recorded[2].indexOf("--state") + 1], "idle");
+
+	_setExecFileImplForTest();
+	delete process.env.HERDR_PANE_ID;
+	console.log("Test 18 passed: two concurrent attentions");
+}
+
+// Test 19: Last close emits exactly one unblocked
+{
+	process.env.HERDR_PANE_ID = "w1:p1";
+
+	const recorded = [];
+	_setExecFileImplForTest((command, args, callback) => {
+		recorded.push(args);
+		callback(null);
+	});
+
+	const { pi: mockPi19, handlers } = createMockPi();
+	loadExtension(mockPi19);
+
+	const ctx = createMainSessionContext(createDialogUI().ui);
+	await handlers.session_start({ type: "session_start", reason: "startup" }, ctx);
+	await _waitForMetadataQueueForTest();
+	recorded.length = 0;
+
+	emitAttention(mockPi19, { active: true, attention_id: "att-x", task_id: "t1", reason: "enrollment" });
+	emitAttention(mockPi19, { active: false, attention_id: "att-x", task_id: "t1", reason: "enrollment" });
+	await _waitForMetadataQueueForTest();
+
+	const stateChanges = recorded.map((a) => a[a.indexOf("--state") + 1]);
+	assert.deepEqual(stateChanges, ["blocked", "idle"]);
+
+	_setExecFileImplForTest();
+	delete process.env.HERDR_PANE_ID;
+	console.log("Test 19 passed: exactly one unblocked on last close");
+}
+
+// Test 20: Duplicate open, duplicate close, and unknown close are idempotent
+{
+	process.env.HERDR_PANE_ID = "w1:p1";
+
+	const recorded = [];
+	_setExecFileImplForTest((command, args, callback) => {
+		recorded.push(args);
+		callback(null);
+	});
+
+	const { pi: mockPi20, handlers } = createMockPi();
+	loadExtension(mockPi20);
+
+	const ctx = createMainSessionContext(createDialogUI().ui);
+	await handlers.session_start({ type: "session_start", reason: "startup" }, ctx);
+	await _waitForMetadataQueueForTest();
+	recorded.length = 0;
+
+	// Duplicate open
+	emitAttention(mockPi20, { active: true, attention_id: "att-dup", task_id: "t1", reason: "enrollment" });
+	emitAttention(mockPi20, { active: true, attention_id: "att-dup", task_id: "t1", reason: "enrollment" });
+	await _waitForMetadataQueueForTest();
+	assert.equal(recorded.length, 1, "duplicate open must not double-publish");
+
+	// Close once
+	emitAttention(mockPi20, { active: false, attention_id: "att-dup", task_id: "t1", reason: "enrollment" });
+	await _waitForMetadataQueueForTest();
+	assert.equal(recorded.length, 2);
+	assert.equal(recorded[1][recorded[1].indexOf("--state") + 1], "idle");
+
+	// Duplicate close
+	emitAttention(mockPi20, { active: false, attention_id: "att-dup", task_id: "t1", reason: "enrollment" });
+	await _waitForMetadataQueueForTest();
+	assert.equal(recorded.length, 2, "duplicate close must not publish again");
+
+	// Unknown close
+	emitAttention(mockPi20, { active: false, attention_id: "att-never-opened", task_id: "t1", reason: "enrollment" });
+	await _waitForMetadataQueueForTest();
+	assert.equal(recorded.length, 2, "unknown close must be a no-op");
+
+	_setExecFileImplForTest();
+	delete process.env.HERDR_PANE_ID;
+	console.log("Test 20 passed: idempotent duplicate/unknown events");
+}
+
+// Test 21: active:false without label still closes by attention_id
+{
+	process.env.HERDR_PANE_ID = "w1:p1";
+
+	const recorded = [];
+	_setExecFileImplForTest((command, args, callback) => {
+		recorded.push(args);
+		callback(null);
+	});
+
+	const { pi: mockPi21, handlers } = createMockPi();
+	loadExtension(mockPi21);
+
+	const ctx = createMainSessionContext(createDialogUI().ui);
+	await handlers.session_start({ type: "session_start", reason: "startup" }, ctx);
+	await _waitForMetadataQueueForTest();
+	recorded.length = 0;
+
+	emitAttention(mockPi21, { active: true, attention_id: "att-nolabel", task_id: "t1", reason: "enrollment", label: "Enroll now" });
+	// Close without label field
+	emitAttention(mockPi21, { active: false, attention_id: "att-nolabel", task_id: "t1", reason: "enrollment" });
+	await _waitForMetadataQueueForTest();
+	assert.equal(recorded.length, 2);
+	assert.equal(recorded[1][recorded[1].indexOf("--state") + 1], "idle");
+
+	_setExecFileImplForTest();
+	delete process.env.HERDR_PANE_ID;
+	console.log("Test 21 passed: close without label works");
+}
+
+// Test 22: Malformed payloads do not change state and do not throw
+{
+	process.env.HERDR_PANE_ID = "w1:p1";
+
+	const recorded = [];
+	_setExecFileImplForTest((command, args, callback) => {
+		recorded.push(args);
+		callback(null);
+	});
+
+	const { pi: mockPi22, handlers } = createMockPi();
+	loadExtension(mockPi22);
+
+	const ctx = createMainSessionContext(createDialogUI().ui);
+	await handlers.session_start({ type: "session_start", reason: "startup" }, ctx);
+	await _waitForMetadataQueueForTest();
+	recorded.length = 0;
+
+	// All of these must be silently ignored
+	emitAttention(mockPi22, null);
+	emitAttention(mockPi22, undefined);
+	emitAttention(mockPi22, 42);
+	emitAttention(mockPi22, "string");
+	emitAttention(mockPi22, { active: "yes", attention_id: "a1" }); // active not boolean
+	emitAttention(mockPi22, { active: true }); // missing attention_id
+	emitAttention(mockPi22, { active: true, attention_id: "" }); // empty attention_id
+	emitAttention(mockPi22, { active: true, attention_id: 123, task_id: "t", reason: "enrollment" }); // attention_id not string
+	await _waitForMetadataQueueForTest();
+	assert.equal(recorded.length, 0, "malformed payloads must not produce state changes");
+
+	_setExecFileImplForTest();
+	delete process.env.HERDR_PANE_ID;
+	console.log("Test 22 passed: malformed payloads ignored");
+}
+
+// Test 23: Shutdown clears unclosed attentions
+{
+	process.env.HERDR_PANE_ID = "w1:p1";
+
+	const recorded = [];
+	_setExecFileImplForTest((command, args, callback) => {
+		recorded.push(args);
+		callback(null);
+	});
+
+	const { pi: mockPi23, handlers } = createMockPi();
+	loadExtension(mockPi23);
+
+	const ctx = createMainSessionContext(createDialogUI().ui);
+	await handlers.session_start({ type: "session_start", reason: "startup" }, ctx);
+	await _waitForMetadataQueueForTest();
+	recorded.length = 0;
+
+	// Open two attentions, leave them open
+	emitAttention(mockPi23, { active: true, attention_id: "att-leak-1", task_id: "t1", reason: "enrollment" });
+	emitAttention(mockPi23, { active: true, attention_id: "att-leak-2", task_id: "t2", reason: "descriptor_waiver" });
+	await _waitForMetadataQueueForTest();
+	recorded.length = 0;
+
+	await handlers.session_shutdown({ type: "session_shutdown", reason: "quit" }, ctx);
+	await _waitForMetadataQueueForTest();
+
+	// Should clear metadata + publish idle
+	assert.ok(recorded.some((a) => a.join(" ").includes("--clear-token")));
+	assert.ok(recorded.some((a) => a[a.indexOf("--state") + 1] === "idle"));
+
+	// Verify attentions were cleaned: closing them should be no-ops
+	const countBeforeClose = recorded.length;
+	emitAttention(mockPi23, { active: false, attention_id: "att-leak-1", task_id: "t1", reason: "enrollment" });
+	emitAttention(mockPi23, { active: false, attention_id: "att-leak-2", task_id: "t2", reason: "descriptor_waiver" });
+	await _waitForMetadataQueueForTest();
+	assert.equal(recorded.length, countBeforeClose, "closing already-cleared attentions must be no-ops");
+
+	_setExecFileImplForTest();
+	delete process.env.HERDR_PANE_ID;
+	console.log("Test 23 passed: shutdown clears unclosed attentions");
+}
+
+// Test 24: Attention unblock does not clear dialog-based blocked state
+{
+	process.env.HERDR_PANE_ID = "w1:p1";
+
+	const recorded = [];
+	_setExecFileImplForTest((command, args, callback) => {
+		recorded.push(args);
+		callback(null);
+	});
+
+	const { pi: mockPi24, handlers } = createMockPi();
+	loadExtension(mockPi24);
+
+	const { ui, confirmDialog } = createDialogUI();
+	const ctx = createMainSessionContext(ui);
+	await handlers.session_start({ type: "session_start", reason: "startup" }, ctx);
+	await _waitForMetadataQueueForTest();
+	recorded.length = 0;
+
+	// Open a UI dialog (other provider of blocked)
+	const confirmPromise = ui.confirm("Confirm something");
+	await _waitForMetadataQueueForTest();
+	assert.equal(recorded.length, 1);
+	assert.equal(recorded[0][recorded[0].indexOf("--state") + 1], "blocked");
+
+	// Open and close an attention while dialog is still open
+	emitAttention(mockPi24, { active: true, attention_id: "att-cross", task_id: "t1", reason: "enrollment" });
+	await _waitForMetadataQueueForTest();
+	assert.equal(recorded.length, 2); // second blocked
+
+	emitAttention(mockPi24, { active: false, attention_id: "att-cross", task_id: "t1", reason: "enrollment" });
+	await _waitForMetadataQueueForTest();
+	// Should NOT unblock because dialog is still open
+	assert.equal(recorded.length, 2, "closing attention must not unblock while dialog is open");
+
+	// Now close dialog
+	confirmDialog.resolve(true);
+	await confirmPromise;
+	await _waitForMetadataQueueForTest();
+	assert.equal(recorded.length, 3);
+	assert.equal(recorded[2][recorded[2].indexOf("--state") + 1], "idle");
+
+	_setExecFileImplForTest();
+	delete process.env.HERDR_PANE_ID;
+	console.log("Test 24 passed: attention does not clear dialog blocked");
+}
+
+// Test 25: Herdr publish failure does not throw to host
+{
+	process.env.HERDR_PANE_ID = "w1:p1";
+
+	_setExecFileImplForTest((command, args, callback) => {
+		callback(new Error("herdr not found"));
+	});
+
+	const { pi: mockPi25, handlers } = createMockPi();
+	loadExtension(mockPi25);
+
+	const ctx = createMainSessionContext(createDialogUI().ui);
+	await handlers.session_start({ type: "session_start", reason: "startup" }, ctx);
+
+	// This must not throw
+	emitAttention(mockPi25, { active: true, attention_id: "att-fail", task_id: "t1", reason: "enrollment" });
+	await _waitForMetadataQueueForTest();
+
+	emitAttention(mockPi25, { active: false, attention_id: "att-fail", task_id: "t1", reason: "enrollment" });
+	await _waitForMetadataQueueForTest();
+
+	_setExecFileImplForTest();
+	delete process.env.HERDR_PANE_ID;
+	console.log("Test 25 passed: herdr failure does not throw");
+}
+
+console.log("All pi-herdr-status tests (including Immune-Brain) passed!");
