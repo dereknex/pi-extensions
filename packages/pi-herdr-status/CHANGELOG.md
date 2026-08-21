@@ -1,5 +1,11 @@
 # pi-herdr-status
 
+## 0.2.0
+
+### Minor Changes
+
+- 24a7418: Support Immune-Brain user-attention events and aggregate with Herdr blocked state
+
 ## 0.1.3
 
 ### Patch Changes
