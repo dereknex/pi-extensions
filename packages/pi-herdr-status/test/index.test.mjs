@@ -69,9 +69,11 @@ assert.equal(DEFAULT_TOKEN_NAME, "model_info");
 function createMockPi() {
 	const handlers = {};
 	const eventHandlers = {};
+	const emittedEvents = [];
 	return {
 		handlers,
 		eventHandlers,
+		emittedEvents,
 		pi: {
 			on(event, fn) {
 				handlers[event] = fn;
@@ -82,6 +84,7 @@ function createMockPi() {
 					return () => { delete eventHandlers[channel]; };
 				},
 				emit(channel, data) {
+					emittedEvents.push({ channel, data });
 					if (eventHandlers[channel]) eventHandlers[channel](data);
 				},
 			},
@@ -315,6 +318,9 @@ function createMockPi() {
 	await _waitForMetadataQueueForTest();
 
 	assert.equal(recorded.length, 1);
+	assert.equal(recorded[0][0], "pane");
+	assert.equal(recorded[0][1], "report-agent");
+	assert.equal(recorded[0][2], "w1:p1");
 	const argStr = recorded[0].join(" ");
 	assert.ok(argStr.includes("report-agent"));
 	assert.ok(argStr.includes("--source pi-model"));
@@ -866,6 +872,50 @@ function emitAttention(pi, payload) {
 	_setExecFileImplForTest();
 	delete process.env.HERDR_PANE_ID;
 	console.log("Test 25 passed: herdr failure does not throw");
+}
+
+// Test 26: Bridges attention and dialog events to herdr:blocked on pi.events bus
+{
+	process.env.HERDR_PANE_ID = "w1:p1";
+
+	_setExecFileImplForTest((command, args, callback) => {
+		callback(null);
+	});
+
+	const { pi: mockPi26, handlers, emittedEvents } = createMockPi();
+	loadExtension(mockPi26);
+
+	const { ui, confirmDialog } = createDialogUI();
+	const ctx = createMainSessionContext(ui);
+	await handlers.session_start({ type: "session_start", reason: "startup" }, ctx);
+	await _waitForMetadataQueueForTest();
+	emittedEvents.length = 0;
+
+	// 1. Attention open/close emits herdr:blocked
+	emitAttention(mockPi26, { active: true, attention_id: "att-bridge", task_id: "t1", reason: "enrollment", label: "Approve enrollment" });
+	const blockedEvt = emittedEvents.find((e) => e.channel === "herdr:blocked" && e.data?.active === true);
+	assert.ok(blockedEvt, "must emit herdr:blocked active: true on attention start");
+	assert.equal(blockedEvt.data.label, "Waiting for user: Approve enrollment");
+
+	emitAttention(mockPi26, { active: false, attention_id: "att-bridge", task_id: "t1", reason: "enrollment" });
+	const unblockedEvt = emittedEvents.find((e) => e.channel === "herdr:blocked" && e.data?.active === false);
+	assert.ok(unblockedEvt, "must emit herdr:blocked active: false on attention close");
+
+	// 2. UI dialog open/close emits herdr:blocked
+	emittedEvents.length = 0;
+	const confirmPromise = ui.confirm("Confirm deletion");
+	const dialogBlockedEvt = emittedEvents.find((e) => e.channel === "herdr:blocked" && e.data?.active === true);
+	assert.ok(dialogBlockedEvt, "must emit herdr:blocked active: true on dialog open");
+	assert.equal(dialogBlockedEvt.data.label, "Waiting for user: Confirm deletion");
+
+	confirmDialog.resolve(true);
+	await confirmPromise;
+	const dialogUnblockedEvt = emittedEvents.find((e) => e.channel === "herdr:blocked" && e.data?.active === false);
+	assert.ok(dialogUnblockedEvt, "must emit herdr:blocked active: false on dialog close");
+
+	_setExecFileImplForTest();
+	delete process.env.HERDR_PANE_ID;
+	console.log("Test 26 passed: bridges attention and dialog events to herdr:blocked");
 }
 
 console.log("All pi-herdr-status tests (including Immune-Brain) passed!");

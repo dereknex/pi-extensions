@@ -135,12 +135,13 @@ export function reportAgentState(
 	paneId?: string,
 	source = DEFAULT_SOURCE,
 ): void {
-	const args = ["pane", "report-agent", "--source", source, "--agent", agentLabel || "pi", "--state", state];
-	if (message) {
-		args.push("--message", message);
-	}
+	const args = ["pane", "report-agent"];
 	if (paneId) {
 		args.push(paneId);
+	}
+	args.push("--source", source, "--agent", agentLabel || "pi", "--state", state);
+	if (message) {
+		args.push("--message", message);
 	}
 
 	runHerdrSerially(args);
@@ -235,14 +236,25 @@ export default function (pi: ExtensionAPI): void {
 		if (!isBlocked()) publishState(state);
 	};
 
+	const emitHerdrBlocked = (active: boolean, label?: string) => {
+		try {
+			pi.events?.emit?.("herdr:blocked", { active, label });
+		} catch {
+			// Non-authoritative event bridge
+		}
+	};
+
 	const onDialogOpen = (title: string) => {
 		activeDialogs += 1;
-		publishState("blocked", title ? `Waiting for user: ${title}` : "Waiting for user");
+		const message = title ? `Waiting for user: ${title}` : "Waiting for user";
+		publishState("blocked", message);
+		emitHerdrBlocked(true, message);
 	};
 
 	const onDialogClose = () => {
 		activeDialogs -= 1;
 		if (!isBlocked()) publishState(lifecycleState);
+		emitHerdrBlocked(false);
 	};
 
 	const updateStatus = () => {
@@ -315,7 +327,7 @@ export default function (pi: ExtensionAPI): void {
 
 	// Immune-Brain user-attention integration: track active attentions and
 	// map them onto the existing blocked/unblocked lifecycle.
-	pi.events.on("immune-brain:user-attention.v1", (data: unknown) => {
+	pi.events?.on?.("immune-brain:user-attention.v1", (data: unknown) => {
 		try {
 			if (!data || typeof data !== "object") return;
 			const evt = data as Record<string, unknown>;
@@ -325,11 +337,14 @@ export default function (pi: ExtensionAPI): void {
 				if (activeAttentions.has(evt.attention_id)) return; // idempotent
 				activeAttentions.add(evt.attention_id);
 				const label = typeof evt.label === "string" && evt.label ? evt.label : "Immune-Brain";
-				publishState("blocked", `Waiting for user: ${label}`);
+				const message = `Waiting for user: ${label}`;
+				publishState("blocked", message);
+				emitHerdrBlocked(true, message);
 			} else {
 				if (!activeAttentions.has(evt.attention_id)) return; // idempotent
 				activeAttentions.delete(evt.attention_id);
 				if (!isBlocked()) publishState(lifecycleState);
+				emitHerdrBlocked(false);
 			}
 		} catch {
 			// Malformed payload must not propagate to host
@@ -342,6 +357,9 @@ export default function (pi: ExtensionAPI): void {
 	pi.on("session_shutdown", async (event, ctx) => {
 		if (isSubagent(ctx)) return;
 		if (event.reason !== "quit") return;
+		for (let i = 0; i < activeAttentions.size; i++) {
+			emitHerdrBlocked(false);
+		}
 		activeAttentions.clear();
 		clearMetadata(paneId);
 		publishState("idle");
