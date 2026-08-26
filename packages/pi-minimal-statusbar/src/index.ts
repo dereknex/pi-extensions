@@ -162,26 +162,61 @@ export default function (pi: FooterExtensionAPI) {
 	let isDirty = false;
 	let sessionAbortController: AbortController | null = null;
 
-	// Real-time performance & cache metrics
-	let startTime: number | null = null;
-	let firstTokenTime: number | null = null;
+	// Session-cumulative performance & cache metrics. Cache hit rate and TPS are
+	// weighted running totals (not per-turn snapshots): TPS accumulates output
+	// tokens over generation time only (first delta -> message_end), so tool
+	// execution time never pollutes it, and the cache rate uses the same totals
+	// as /session (cacheWrite included in the denominator).
+	let startTime: number | null = null; // assistant message_start wall clock (TTFT base)
+	let firstDeltaTime: number | null = null; // first real content delta of the current message
 	let lastTtft: number | null = null;
-	let lastTps: number | null = null;
-	let lastCacheHitRate: number | null = null;
-	let lastCacheReadTokens: number | null = null;
+	let totalOutputTokens = 0;
+	let totalGenMs = 0;
+	let sessionInput = 0;
+	let sessionCacheRead = 0;
+	let sessionCacheWrite = 0;
 
 	pi.on("message_start", (event) => {
 		if (event.message.role === "assistant") {
 			startTime = Date.now();
-			firstTokenTime = null;
+			firstDeltaTime = null;
 		}
 	});
 
 	pi.on("message_update", (event) => {
-		if (event.message.role === "assistant" && startTime && !firstTokenTime) {
-			firstTokenTime = Date.now();
-			lastTtft = (firstTokenTime - startTime) / 1000;
+		// Only a real content delta (text/thinking/toolcall) counts as first
+		// token; the initial "start" event carries no token.
+		if (
+			event.message.role === "assistant" &&
+			startTime &&
+			!firstDeltaTime &&
+			event.assistantMessageEvent?.type.endsWith("_delta")
+		) {
+			firstDeltaTime = Date.now();
+			lastTtft = (firstDeltaTime - startTime) / 1000;
 			tuiRef?.requestRender();
+		}
+	});
+
+	pi.on("message_end", (event) => {
+		const message = event.message;
+		if (message.role === "assistant" && message.usage) {
+			const usage = message.usage;
+			// Weighted generation throughput: this message's output over its own
+			// generation window (tool execution between messages is excluded).
+			if (firstDeltaTime && usage.output > 0) {
+				totalGenMs += Date.now() - firstDeltaTime;
+				totalOutputTokens += usage.output;
+			}
+			sessionInput += usage.input;
+			sessionCacheRead += usage.cacheRead;
+			sessionCacheWrite += usage.cacheWrite;
+			tuiRef?.requestRender();
+		} else if (message.role === "toolResult" && message.usage) {
+			// Nested model calls (tools/summaries) count into /session totals too.
+			sessionInput += message.usage.input;
+			sessionCacheRead += message.usage.cacheRead;
+			sessionCacheWrite += message.usage.cacheWrite;
 		}
 	});
 
@@ -221,25 +256,6 @@ export default function (pi: FooterExtensionAPI) {
 
 	pi.on("turn_end", (event) => {
 		void refreshDirty();
-		if (event.message?.role === "assistant" && event.message.usage) {
-			const usage = event.message.usage;
-			const endTime = Date.now();
-			const durationSec = startTime ? (endTime - startTime) / 1000 : 0;
-
-			if (durationSec > 0 && usage.output) {
-				lastTps = usage.output / durationSec;
-			}
-			const cacheRead =
-				(usage as any).cacheRead ?? (usage as any).cacheReadTokens ?? 0;
-			const input = usage.input ?? 0;
-			const totalInput = input + cacheRead;
-
-			if (totalInput > 0) {
-				lastCacheHitRate = Math.round((cacheRead / totalInput) * 100);
-				lastCacheReadTokens = cacheRead;
-			}
-			tuiRef?.requestRender();
-		}
 	});
 
 	function formatContextWindow(n: number | undefined): string {
@@ -479,6 +495,38 @@ export default function (pi: FooterExtensionAPI) {
 		modelId = ctx.model?.id;
 		contextWindow = ctx.model?.contextWindow;
 		thinkingLevel = pi.getThinkingLevel();
+
+		// Seed session-cumulative cache totals from persisted entries (including
+		// compacted history) so resume matches /session. TPS is not recoverable
+		// from persisted sessions — message_end time is not stored — so it starts
+		// fresh on every session start.
+		let seededInput = 0;
+		let seededCacheRead = 0;
+		let seededCacheWrite = 0;
+		for (const entry of ctx.sessionManager.getEntries()) {
+			const usage =
+				entry.type === "message" && entry.message.role === "assistant"
+					? entry.message.usage
+					: entry.type === "message" &&
+							entry.message.role === "toolResult" &&
+							entry.message.usage
+						? entry.message.usage
+						: (entry.type === "branch_summary" ||
+								entry.type === "compaction") &&
+							entry.usage
+							? entry.usage
+							: undefined;
+			if (usage) {
+				seededInput += usage.input;
+				seededCacheRead += usage.cacheRead;
+				seededCacheWrite += usage.cacheWrite;
+			}
+		}
+		sessionInput = seededInput;
+		sessionCacheRead = seededCacheRead;
+		sessionCacheWrite = seededCacheWrite;
+		totalOutputTokens = 0;
+		totalGenMs = 0;
 		void refreshDirty();
 
 		ctx.ui.setFooter((tui, theme, footerData) => {
@@ -535,17 +583,23 @@ export default function (pi: FooterExtensionAPI) {
 							: theme.fg("accent", model);
 
 					// ── Real-time Performance & Cache Stats ──
+					const tps = computeWeightedTps(totalOutputTokens, totalGenMs);
 					const tpsStr =
-						footerSettings.showTps !== false && lastTps !== null
-							? theme.fg("muted", `${lastTps.toFixed(1)} t/s`)
+						footerSettings.showTps !== false && tps !== null
+							? theme.fg("muted", `${tps.toFixed(1)} t/s`)
 							: "";
 					const ttftStr =
 						footerSettings.showTtft !== false && lastTtft !== null
 							? theme.fg("muted", `${lastTtft.toFixed(2)}s ttft`)
 							: "";
+					const cacheHitRate = computeCacheHitRate(
+						sessionInput,
+						sessionCacheRead,
+						sessionCacheWrite,
+					);
 					const cacheStr =
-						footerSettings.showCacheStats !== false && lastCacheHitRate !== null
-							? theme.fg("muted", `cache:${lastCacheHitRate}%`)
+						footerSettings.showCacheStats !== false && cacheHitRate !== null
+							? theme.fg("muted", `cache:${cacheHitRate}%`)
 							: "";
 
 					// ── Optional extension indicators ──
@@ -666,4 +720,32 @@ export default function (pi: FooterExtensionAPI) {
 		sessionAbortController = null;
 		tuiRef = null;
 	});
+}
+
+/**
+ * Session-cumulative cache hit rate (percent), matching /session's
+ * `cacheRead / (input + cacheRead + cacheWrite)` formula. cacheWrite counts in
+ * the denominator because Anthropic-style providers bill it as uncached input.
+ * Returns null when there are no prompt tokens.
+ */
+export function computeCacheHitRate(
+	input: number,
+	cacheRead: number,
+	cacheWrite: number,
+): number | null {
+	const promptTokens = input + cacheRead + cacheWrite;
+	return promptTokens > 0 ? Math.round((cacheRead / promptTokens) * 100) : null;
+}
+
+/**
+ * Weighted generation throughput over the whole run: total output tokens over
+ * total generation time in milliseconds. Weighting (instead of averaging
+ * per-turn t/s) keeps short tool-call turns from distorting the figure.
+ * Returns null while there is no generation time yet.
+ */
+export function computeWeightedTps(
+	totalOutputTokens: number,
+	totalGenMs: number,
+): number | null {
+	return totalGenMs > 0 ? (totalOutputTokens / totalGenMs) * 1000 : null;
 }

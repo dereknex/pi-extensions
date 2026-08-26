@@ -19,7 +19,7 @@ Part of the [pi-extensions](https://github.com/dereknex/pi-extensions) monorepo.
 
 - Current directory (with `~` for home), git branch with dirty marker.
 - Model name, provider, and thinking level colored by effort.
-- Real-time tokens/s, time-to-first-token, and cache hit rate (from message usage).
+- Real-time tokens/s (run-weighted generation throughput, tool time excluded), time-to-first-token, and session-cumulative cache hit rate (matches /session).
 - Quota status from other extensions (e.g. [pi-sub2api-provider](https://www.npmjs.com/package/pi-sub2api-provider)) and arbitrary extension statuses via `ctx.ui.setStatus()`.
 - Context usage bar with color gradient (green → yellow → orange → red).
 - Layout falls back to two rows when the single row does not fit the terminal width.
@@ -69,9 +69,9 @@ All options are optional; defaults are shown below. Configure under the `minimal
 | `showGit` | `true` | Show git branch (+ `±` dirty marker) |
 | `showModel` | `true` | Show provider/model |
 | `showThinking` | `true` | Show thinking level (colored by effort) |
-| `showTps` | `true` | Show tokens per second |
+| `showTps` | `true` | Show tokens per second (weighted over generation time, tool time excluded) |
 | `showTtft` | `true` | Show time to first token |
-| `showCacheStats` | `true` | Show cache hit rate |
+| `showCacheStats` | `true` | Show session-cumulative cache hit rate (matches /session) |
 | `showQuota` | `true` | Show quota status from other extensions |
 | `showGoal` | `true` | Show the goal status entry |
 | `showContextBar` | `true` | Show context usage bar |

@@ -19,7 +19,7 @@
 
 - 当前目录（home 缩写为 `~`）、git 分支及脏标记。
 - 模型名、provider，以及按思考强度着色的 thinking level。
-- 实时 tokens/s、首字延迟（ttft）、缓存命中率（来自 message usage）。
+- 实时 tokens/s（按生成时长加权的本次运行吞吐，不含工具执行时间）、首字延迟（ttft）、会话累计缓存命中率（与 /session 一致）。
 - 其他扩展的额度状态（如 [pi-sub2api-provider](https://www.npmjs.com/package/pi-sub2api-provider)）与任意 `ctx.ui.setStatus()` 扩展状态。
 - 上下文使用条，颜色渐变（绿 → 黄 → 橙 → 红）。
 - 单行放不下时自动拆成两行。
@@ -69,9 +69,9 @@ pi install npm:pi-minimal-statusbar
 | `showGit` | `true` | 显示 git 分支（带 `±` 脏标记） |
 | `showModel` | `true` | 显示 provider/model |
 | `showThinking` | `true` | 显示 thinking level（按强度着色） |
-| `showTps` | `true` | 显示每秒 tokens |
+| `showTps` | `true` | 显示每秒 tokens（按生成时长加权，不含工具执行时间） |
 | `showTtft` | `true` | 显示首字延迟 |
-| `showCacheStats` | `true` | 显示缓存命中率 |
+| `showCacheStats` | `true` | 显示会话累计缓存命中率（与 /session 一致） |
 | `showQuota` | `true` | 显示其他扩展的额度状态 |
 | `showGoal` | `true` | 显示 goal 状态 |
 | `showContextBar` | `true` | 显示上下文使用条 |
