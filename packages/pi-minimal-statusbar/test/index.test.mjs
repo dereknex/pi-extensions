@@ -12,7 +12,20 @@ const srcTsPath = path.resolve(__dirname, "../src/index.ts");
 const distDir = path.resolve(__dirname, "../.test-dist");
 const compiledJsPath = path.join(distDir, "index.js");
 
-const tsSource = fs.readFileSync(srcTsPath, "utf8");
+const tsSourceOriginal = fs.readFileSync(srcTsPath, "utf8");
+// The compiled artifact must not load runtime packages: importing pi-tui /
+// pi-coding-agent on CI's Node 20 throws webidl.util.markAsUncloneable is not
+// a function (the internal exists only in newer Node). The tested logic lives
+// in pure functions, so stub the two runtime imports out.
+const tsSource = tsSourceOriginal
+	.replace(
+		/import\s*\{[\s\S]*?CONFIG_DIR_NAME[\s\S]*?\}\s*from\s*"@earendil-works\/pi-coding-agent";/,
+		'const CONFIG_DIR_NAME = ".pi";',
+	)
+	.replace(
+		'import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";',
+		'const truncateToWidth = (text) => text;\nconst visibleWidth = (text) => text.length;',
+	);
 const { outputText } = ts.transpileModule(tsSource, {
 	compilerOptions: {
 		module: ts.ModuleKind.ESNext,
