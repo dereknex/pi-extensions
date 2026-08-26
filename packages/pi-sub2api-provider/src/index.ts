@@ -848,7 +848,11 @@ export default async function (pi: ExtensionAPI) {
 		onQuota?: () => void,
 	): void {
 		void loadRemoteModels(providerId);
-		void ensureQuotaProvider(providerId).then((ok) => {
+		const info = quotaProviders.get(providerId);
+		const refresh = info
+			? updateQuota(providerId, info.baseUrl, info.apiKey)
+			: ensureQuotaProvider(providerId);
+		void refresh.then((ok) => {
 			if (ok) onQuota?.();
 		});
 	}
@@ -865,6 +869,7 @@ export default async function (pi: ExtensionAPI) {
 			);
 		}
 		refreshProviderInBackground(model.provider, () => {
+			if (ctx.model?.provider !== model.provider) return;
 			const fresh = quotaProviders.get(model.provider);
 			if (!fresh) return;
 			ctx.ui.setStatus(
@@ -878,24 +883,11 @@ export default async function (pi: ExtensionAPI) {
 		const { model } = event;
 		const providerId = model.provider;
 
-		if (!lazyProviders.has(providerId)) {
-			ctx.ui.setStatus("sub2api-quota", undefined);
-			return;
-		}
-
-		const info = quotaProviders.get(providerId);
-		if (info) {
-			ctx.ui.setStatus(
-				"sub2api-quota",
-				ctx.ui.theme.fg("accent", formatStatusText(providerId, info)),
-			);
-			if (Date.now() - info.lastUpdated <= 60000) {
-				void loadRemoteModels(providerId);
-				return;
-			}
-		}
+		ctx.ui.setStatus("sub2api-quota", undefined);
+		if (!lazyProviders.has(providerId)) return;
 
 		refreshProviderInBackground(providerId, () => {
+			if (ctx.model?.provider !== providerId) return;
 			const fresh = quotaProviders.get(providerId);
 			if (!fresh) return;
 			ctx.ui.setStatus(
@@ -915,6 +907,7 @@ export default async function (pi: ExtensionAPI) {
 				if (!info) return;
 				return updateQuota(model.provider, info.baseUrl, info.apiKey).then(
 					() => {
+						if (ctx.model?.provider !== model.provider) return;
 						const fresh = quotaProviders.get(model.provider);
 						if (!fresh) return;
 						ctx.ui.setStatus(

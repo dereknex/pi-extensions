@@ -9,20 +9,58 @@ import ts from "typescript";
 const testFile = fileURLToPath(import.meta.url);
 
 async function runChild() {
-	if (process.env.PI_REMOTE_MODELS_UNAVAILABLE === "1") {
+	if (process.env.PI_USAGE_SWITCH_CHILD === "1") {
+		globalThis.fetch = async (input) => {
+			const url = String(input);
+			if (url === "https://example.test/v1/usage") {
+				return Response.json({
+					rate_limits: [
+						{ limit: 100, remaining: 75, used: 25, window: "daily" },
+					],
+				});
+			}
+			return new Response(null, { status: 404 });
+		};
+	} else if (process.env.PI_REMOTE_MODELS_UNAVAILABLE === "1") {
 		globalThis.fetch = async () => new Response(null, { status: 503 });
 	}
 	const { default: loadExtension } = await import(
 		pathToFileURL(process.env.PI_TEST_EXTENSION).href
 	);
 	const registrations = [];
+	const handlers = {};
 	const pi = {
 		registerProvider: (_id, config) => registrations.push(config),
-		on: () => undefined,
+		on: (event, handler) => {
+			handlers[event] = handler;
+		},
 		registerCommand: () => undefined,
 		unregisterProvider: () => undefined,
 	};
 	await loadExtension(pi);
+
+	if (process.env.PI_USAGE_SWITCH_CHILD === "1") {
+		const statuses = [];
+		const ctx = {
+			model: { provider: "test", id: "test-model" },
+			ui: {
+				setStatus: (_key, value) => statuses.push(value),
+				theme: { fg: (_color, value) => value },
+			},
+		};
+		handlers.model_select({ model: ctx.model }, ctx);
+		const deadline = Date.now() + 1000;
+		while (!statuses.at(-1)?.includes("test") && Date.now() < deadline) {
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+		assert.match(statuses.at(-1) ?? "", /test/);
+
+		ctx.model = { provider: "other", id: "other-model" };
+		handlers.model_select({ model: ctx.model }, ctx);
+		assert.equal(statuses.at(-1), undefined);
+		console.log("usage-cleared-on-model-switch");
+		return;
+	}
 
 	if (process.env.PI_LIVE_LOGOUT_CHILD === "1") {
 		const agentDir = path.join(os.homedir(), ".pi", "agent");
@@ -63,6 +101,7 @@ function runScenario(
 		auth = { test: { type: "api-key", key: "test-key" } },
 		modelsCache,
 		liveLogout = false,
+		usageSwitch = false,
 	} = {},
 ) {
 	const home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sub2api-home-"));
@@ -77,6 +116,14 @@ function runScenario(
 					...(api ? { api } : {}),
 					...(includeModels ? { models: [{ id: "test-model" }] } : {}),
 				},
+				...(usageSwitch
+					? {
+							other: {
+								baseUrl: "https://other.test/v1",
+								models: [{ id: "other-model" }],
+							},
+						}
+					: {}),
 			},
 		}),
 	);
@@ -95,9 +142,14 @@ function runScenario(
 				HOME: home,
 				PI_API_SELECTION_CHILD: "1",
 				PI_TEST_EXTENSION: compiledExtension,
-				PI_EXPECTED_REGISTRATIONS: includeModels && auth.test ? "1" : "0",
+				PI_EXPECTED_REGISTRATIONS: usageSwitch
+					? "2"
+					: includeModels && auth.test
+						? "1"
+						: "0",
 				PI_REMOTE_MODELS_UNAVAILABLE: remoteModelsUnavailable ? "1" : "0",
 				...(liveLogout ? { PI_LIVE_LOGOUT_CHILD: "1" } : {}),
+				...(usageSwitch ? { PI_USAGE_SWITCH_CHILD: "1" } : {}),
 			},
 			encoding: "utf8",
 		});
@@ -167,7 +219,15 @@ if (process.env.PI_API_SELECTION_CHILD === "1") {
 			liveLogout: true,
 		});
 		assert.equal(liveLogout.stdout, "live-logout-cleared");
-		console.log("API adapter selection and silent model probing passed");
+		const usageSwitch = runScenario(compiledExtension, {
+			auth: {
+				test: { type: "api-key", key: "test-key" },
+				other: { type: "api-key", key: "other-key" },
+			},
+			usageSwitch: true,
+		});
+		assert.equal(usageSwitch.stdout, "usage-cleared-on-model-switch");
+		console.log("API adapter selection, model probing, and usage reset passed");
 	} finally {
 		fs.rmSync(buildDir, { recursive: true, force: true });
 	}
