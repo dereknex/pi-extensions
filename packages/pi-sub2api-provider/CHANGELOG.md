@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.2
+
+### Patch Changes
+
+- 5039775: Clear stale quota usage when switching models and only show the selected provider after its usage refresh completes.
+
 ## 0.5.1
 
 ### Patch Changes
