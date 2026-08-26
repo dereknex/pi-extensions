@@ -35,9 +35,12 @@ const { outputText } = ts.transpileModule(tsSource, {
 fs.mkdirSync(distDir, { recursive: true });
 fs.writeFileSync(compiledJsPath, outputText, "utf8");
 
-const { computeCacheHitRate, computeWeightedTps } = await import(
-	pathToFileURL(compiledJsPath).href
-);
+const statusbar = await import(pathToFileURL(compiledJsPath).href);
+const {
+	default: loadExtension,
+	computeCacheHitRate,
+	computeWeightedTps,
+} = statusbar;
 
 test.after(() => {
 	fs.rmSync(distDir, { recursive: true, force: true });
@@ -72,4 +75,106 @@ test("tps is weighted by total generation time, not per-turn average", () => {
 test("tps is null with no generation time", () => {
 	assert.equal(computeWeightedTps(0, 0), null);
 	assert.equal(computeWeightedTps(500, 0), null);
+});
+
+test("model or provider selection resets performance and cache metrics", async () => {
+	const handlers = {};
+	let footer;
+	const tui = { requestRender() {} };
+	const theme = {
+		fg(_color, text) {
+			return text;
+		},
+		bold(text) {
+			return text;
+		},
+	};
+	const footerData = {
+		onBranchChange() {
+			return () => {};
+		},
+		getGitBranch() {
+			return undefined;
+		},
+		getExtensionStatuses() {
+			return new Map();
+		},
+	};
+	const pi = {
+		cwd: "/tmp/project",
+		on(event, handler) {
+			handlers[event] = handler;
+		},
+		getThinkingLevel() {
+			return "off";
+		},
+		exec() {
+			return Promise.resolve({ code: 0, stdout: "" });
+		},
+	};
+	const ctx = {
+		cwd: "/tmp/project",
+		model: {
+			id: "model-a",
+			provider: "anthropic",
+			contextWindow: 200_000,
+		},
+		sessionManager: {
+			getEntries() {
+				return [];
+			},
+		},
+		ui: {
+			setFooter(factory) {
+				footer = factory(tui, theme, footerData);
+			},
+		},
+		getContextUsage() {
+			return { percent: 0 };
+		},
+	};
+
+	loadExtension(pi);
+	await handlers.session_start({}, ctx);
+
+	const realDateNow = Date.now;
+	const realHome = process.env.HOME;
+	process.env.HOME = "/tmp/pi-minimal-statusbar-test-home";
+	let now = 1_000;
+	Date.now = () => now;
+	try {
+		handlers.message_start({ message: { role: "assistant" } });
+		now = 1_100;
+		handlers.message_update({
+			message: { role: "assistant" },
+			assistantMessageEvent: { type: "text_delta" },
+		});
+		now = 2_100;
+		handlers.message_end({
+			message: {
+				role: "assistant",
+				usage: { input: 10, cacheRead: 90, cacheWrite: 0, output: 100 },
+			},
+		});
+
+		const beforeSwitch = footer.render(200).join("\n");
+		assert.match(beforeSwitch, /100\.0 t\/s/);
+		assert.match(beforeSwitch, /0\.10s ttft/);
+		assert.match(beforeSwitch, /cache:90%/);
+
+		handlers.model_select({
+			model: {
+				id: "model-b",
+				provider: "openai",
+				contextWindow: 128_000,
+			},
+		});
+
+		const afterSwitch = footer.render(200).join("\n");
+		assert.doesNotMatch(afterSwitch, /t\/s|ttft|cache:/);
+	} finally {
+		Date.now = realDateNow;
+		if (realHome === undefined) delete process.env.HOME;
+		else process.env.HOME = realHome;
+	}
 });

@@ -225,6 +225,14 @@ export default function (pi: FooterExtensionAPI) {
 		currentModel = event.model as ModelWithThinking;
 		modelId = event.model.id;
 		contextWindow = event.model.contextWindow;
+		startTime = null;
+		firstDeltaTime = null;
+		lastTtft = null;
+		totalOutputTokens = 0;
+		totalGenMs = 0;
+		sessionInput = 0;
+		sessionCacheRead = 0;
+		sessionCacheWrite = 0;
 		tuiRef?.requestRender();
 	});
 
