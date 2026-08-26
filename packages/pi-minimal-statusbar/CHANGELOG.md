@@ -1,5 +1,11 @@
 # pi-minimal-statusbar
 
+## 0.1.3
+
+### Patch Changes
+
+- eec2b66: Reset cache, TPS, and TTFT metrics when the active model or provider changes.
+
 ## 0.1.2
 
 ### Patch Changes
