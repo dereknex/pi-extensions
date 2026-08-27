@@ -38,13 +38,14 @@ function isRetryableError(e: unknown): boolean {
  * sub2api usage 端点偶尔会超时（undici 在重试耗尽后抛
  * "Aborted after 1 retry attempt"）。这里主动重试，并把
  * 最终错误吃掉返回 null，避免异常逃逸到扩展顶层导致 pi 崩溃。
+ * 对齐 CodexBar 的 15s 超时。
  */
 async function fetchWithRetry(
 	url: string,
 	init: RequestInit & { timeoutMs?: number } = {},
 	retries = 2,
 ): Promise<Response | null> {
-	const { timeoutMs = 5000, ...rest } = init;
+	const { timeoutMs = 15000, ...rest } = init;
 	for (let attempt = 0; attempt <= retries; attempt++) {
 		try {
 			return await fetch(url, {
@@ -61,6 +62,63 @@ async function fetchWithRetry(
 		}
 	}
 	return null;
+}
+
+// ---------------------------------------------------------------------------
+// sub2api usage 端点 — 对齐 CodexBar canonical 逻辑
+// ---------------------------------------------------------------------------
+
+function getTimeZone(): string {
+	try {
+		return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+	} catch {
+		return "UTC";
+	}
+}
+
+/**
+ * CodexBar canonical: base 去尾斜杠 → 若非 /v1 或 /v1/usage 则补 /v1 → 若非 /usage 则补 /usage → 追加 ?days=30&timezone
+ * 参考: Sources/CodexBarCore/Resources/Plugins/sub2api.js
+ */
+function buildCanonicalUsageUrl(baseUrl: string): string {
+	let base = baseUrl.replace(/\/+$/, "");
+	if (!/\/v1(?:\/usage)?$/.test(base)) base += "/v1";
+	if (!base.endsWith("/usage")) base += "/usage";
+	const tz = getTimeZone();
+	return `${base}?days=30&timezone=${encodeURIComponent(tz)}`;
+}
+
+function buildUsageCandidates(baseUrl: string): string[] {
+	const canonical = buildCanonicalUsageUrl(baseUrl);
+	// Fallback for legacy deployments that expose /usage without /v1 prefix or with different base
+	const cleanBase = baseUrl.replace(/\/+$/, "");
+	const root = cleanBase.replace(/\/v1\/?$/, "");
+	const legacy = [`${cleanBase}/usage`, `${root}/v1/usage`].map(
+		(u) => `${u}?days=30&timezone=${encodeURIComponent(getTimeZone())}`,
+	);
+	// 去重，canonical 优先
+	const seen = new Set<string>();
+	const out: string[] = [];
+	for (const u of [canonical, ...legacy]) {
+		if (!seen.has(u)) {
+			seen.add(u);
+			out.push(u);
+		}
+	}
+	return out;
+}
+
+function safeFiniteNumber(value: unknown): number | null {
+	if (typeof value === "number" && Number.isFinite(value)) return value;
+	if (typeof value === "string") {
+		const n = Number(value);
+		if (Number.isFinite(n)) return n;
+	}
+	return null;
+}
+
+function safeString(value: unknown): string | null {
+	return typeof value === "string" ? value : null;
 }
 
 interface ModelCost {
@@ -293,8 +351,31 @@ interface DailyUsage {
 	actual_cost: number;
 }
 
+interface Quota {
+	limit: number;
+	used: number;
+	remaining: number;
+	unit: string;
+}
+
+interface Subscription {
+	dailyUsage: number;
+	weeklyUsage: number;
+	monthlyUsage: number;
+	dailyLimit: number | null;
+	weeklyLimit: number | null;
+	monthlyLimit: number | null;
+	expiresAt: string | null;
+}
+
+interface UsageTotals {
+	requests: number;
+	tokens: number;
+	cost: number;
+}
+
 interface QuotaInfo {
-	baseUrl: string;
+	baseUrl: string; // the canonical usage URL that succeeded
 	apiKey: string;
 	rateLimits: RateLimit[];
 	dailyUsage: DailyUsage[];
@@ -303,6 +384,16 @@ interface QuotaInfo {
 	status: string;
 	mode: string;
 	lastUpdated: number;
+	// --- CodexBar-aligned extensions ---
+	quota: Quota | null;
+	subscription: Subscription | null;
+	balance: number | null;
+	unit: string;
+	planName: string | null;
+	remaining: number | null;
+	expiresAt: string | null;
+	todayUsage: UsageTotals | null;
+	totalUsage: UsageTotals | null;
 }
 
 const quotaProviders = new Map<string, QuotaInfo>();
@@ -410,6 +501,15 @@ function formatMoney(value: number, fractionDigits = 2): string {
 	return `$${value.toFixed(fractionDigits)}`;
 }
 
+function formatMoneyWithUnit(value: number, unit: string, fractionDigits = 2): string {
+	if (!unit || unit.toUpperCase() === "USD") return formatMoney(value, fractionDigits);
+	return `${value.toFixed(fractionDigits)} ${unit}`;
+}
+
+function formatAmount(used: number, limit: number, unit: string = "USD"): string {
+	return `${formatMoneyWithUnit(used, unit)} / ${formatMoneyWithUnit(limit, unit, 0)}`;
+}
+
 function formatUsageLimit(rl: RateLimit): string {
 	return `${normalizeWindowLabel(rl.window)} ${formatMoney(rl.used)}/${formatMoney(rl.limit, 0)}`;
 }
@@ -437,15 +537,20 @@ function pickQuotaWindows(rateLimits: RateLimit[]): RateLimit[] {
 	return picked.length ? picked : rateLimits;
 }
 
+function subscriptionPercent(used: number, limit: number | null): number | null {
+	if (limit === null || limit <= 0) return null;
+	return Math.min(100, Math.max(0, (used / limit) * 100));
+}
+
+// ---------------------------------------------------------------------------
+// Usage fetch — aligned with CodexBar sub2api.js
+// ---------------------------------------------------------------------------
+
 async function probeUsageEndpoint(
 	baseUrl: string,
 	apiKey: string,
 ): Promise<string | null> {
-	const cleanBase = baseUrl.replace(/\/+$/, "");
-	const root = cleanBase.replace(/\/v1\/?$/, "");
-
-	const candidates = [`${cleanBase}/usage`, `${root}/v1/usage`];
-
+	const candidates = buildUsageCandidates(baseUrl);
 	for (const url of candidates) {
 		const res = await fetchWithRetry(url, {
 			headers: {
@@ -453,7 +558,14 @@ async function probeUsageEndpoint(
 				Accept: "application/json",
 			},
 		});
-		if (!res || !res.ok) continue;
+		if (!res) continue;
+		// 对齐 CodexBar 的状态码分级
+		if (res.status === 401 || res.status === 403) {
+			debugQuotaLog(`[sub2api-quota] Auth rejected for ${baseUrl} at ${url} (HTTP ${res.status})`);
+			// 认证失败不再尝试后续候选
+			return null;
+		}
+		if (!res.ok) continue;
 		try {
 			const text = await res.text();
 			if (text.includes("<!doctype") || text.includes("<html")) continue;
@@ -461,15 +573,92 @@ async function probeUsageEndpoint(
 			if (
 				data &&
 				typeof data === "object" &&
-				("rate_limits" in data || "usage" in data || "daily_usage" in data)
+				!Array.isArray(data) &&
+				(data.isValid === false
+					? false
+					: "rate_limits" in data ||
+						"usage" in data ||
+						"daily_usage" in data ||
+						"quota" in data ||
+						"subscription" in data ||
+						"balance" in data)
 			) {
+				// isValid === false 视为不可用，与 CodexBar 保持一致
+				if (data.isValid === false) {
+					debugQuotaLog(`[sub2api-quota] Probe rejected: isValid=false at ${url}`);
+					return null;
+				}
 				return url;
+			}
+			// 兼容旧响应：只要是对象且含任意已知字段即视为可用
+			if (data && typeof data === "object" && !Array.isArray(data)) {
+				// 至少返回过 JSON 对象，视为探测成功（避免误判）
+				// 但需包含上述字段校验，兜底返回 url 以便后续 updateQuota 再做细校验
+				if (Object.keys(data).length > 0) return url;
 			}
 		} catch {
 			// silent
 		}
 	}
 	return null;
+}
+
+function parseQuota(raw: any, fallbackUnit: string): Quota | null {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+	const limit = safeFiniteNumber(raw.limit);
+	const used = safeFiniteNumber(raw.used);
+	const remaining = safeFiniteNumber(raw.remaining);
+	if (limit === null || used === null || remaining === null) return null;
+	const unit = safeString(raw.unit) ?? fallbackUnit;
+	return { limit, used, remaining, unit };
+}
+
+function parseSubscription(raw: any): Subscription | null {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+	const dailyUsage = safeFiniteNumber(raw.daily_usage_usd) ?? 0;
+	const weeklyUsage = safeFiniteNumber(raw.weekly_usage_usd) ?? 0;
+	const monthlyUsage = safeFiniteNumber(raw.monthly_usage_usd) ?? 0;
+	const dailyLimit = safeFiniteNumber(raw.daily_limit_usd);
+	const weeklyLimit = safeFiniteNumber(raw.weekly_limit_usd);
+	const monthlyLimit = safeFiniteNumber(raw.monthly_limit_usd);
+	const expiresAt = safeString(raw.expires_at);
+	// 至少有一项 usage/limit 才视为有效 subscription
+	if (
+		dailyUsage === 0 &&
+		weeklyUsage === 0 &&
+		monthlyUsage === 0 &&
+		dailyLimit === null &&
+		weeklyLimit === null &&
+		monthlyLimit === null &&
+		!expiresAt
+	) {
+		return null;
+	}
+	return {
+		dailyUsage,
+		weeklyUsage,
+		monthlyUsage,
+		dailyLimit,
+		weeklyLimit,
+		monthlyLimit,
+		expiresAt: expiresAt ?? null,
+	};
+}
+
+function parseUsageTotals(raw: any): UsageTotals | null {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+	const requestsRaw = safeFiniteNumber(raw.requests);
+	const tokensRaw = safeFiniteNumber(raw.total_tokens);
+	const costRaw = safeFiniteNumber(raw.actual_cost);
+	// CodexBar 校验 requests/tokens 需为整数；pi 端宽松处理
+	const requests = requestsRaw !== null ? Math.floor(requestsRaw) : 0;
+	const tokens = tokensRaw !== null ? Math.floor(tokensRaw) : 0;
+	const cost = costRaw ?? 0;
+	if (requests === 0 && tokens === 0 && cost === 0) {
+		// 保留空但视为存在，与 CodexBar 的 || 0 语义一致
+		return { requests, tokens, cost };
+	}
+	return { requests, tokens, cost };
 }
 
 async function updateQuota(
@@ -484,19 +673,63 @@ async function updateQuota(
 				Accept: "application/json",
 			},
 		});
-		if (!res || !res.ok) return false;
+		if (!res) return false;
+		if (res.status === 401 || res.status === 403) {
+			console.error(`[sub2api-quota] Auth rejected for ${providerId} (HTTP ${res.status})`);
+			return false;
+		}
+		if (res.status === 429) {
+			console.error(`[sub2api-quota] Rate limited for ${providerId} (HTTP 429)`);
+			return false;
+		}
+		if (res.status >= 500) {
+			console.error(`[sub2api-quota] Provider unavailable for ${providerId} (HTTP ${res.status})`);
+			return false;
+		}
+		if (!res.ok) return false;
 		const text = await res.text();
 		if (text.includes("<!doctype") || text.includes("<html")) return false;
-		const data: any = JSON.parse(text);
+		let data: any;
+		try {
+			data = JSON.parse(text);
+		} catch {
+			return false;
+		}
+		if (!data || typeof data !== "object" || Array.isArray(data)) return false;
+		if (data.isValid === false) {
+			console.error(`[sub2api-quota] API rejected key for ${providerId} (isValid=false)`);
+			return false;
+		}
+
+		// ---- 基础字段 ----
+		const rootUnit = safeString(data.unit);
+		const quotaRaw = data.quota;
+		const quotaParsed = parseQuota(quotaRaw, rootUnit ?? "USD");
+		const unit = rootUnit ?? quotaParsed?.unit ?? "USD";
+		const subscription = parseSubscription(data.subscription);
+		const balance = safeFiniteNumber(data.balance);
+		const remaining = safeFiniteNumber(data.remaining);
+		const planName = safeString(data.planName);
+		const expiresAt = safeString(data.expires_at) ?? subscription?.expiresAt ?? null;
 
 		const rateLimits: RateLimit[] = Array.isArray(data.rate_limits)
-			? data.rate_limits.map((rl: any) => ({
-					limit: Number(rl.limit ?? 0),
-					remaining: Number(rl.remaining ?? 0),
-					used: Number(rl.used ?? 0),
-					window: rl.window ?? "",
-					reset_at: rl.reset_at ?? "",
-				}))
+			? data.rate_limits
+					.map((rl: any) => {
+						if (!rl || typeof rl !== "object" || Array.isArray(rl)) return null;
+						const window = safeString(rl.window);
+						const limit = safeFiniteNumber(rl.limit);
+						const used = safeFiniteNumber(rl.used);
+						const remainingRL = safeFiniteNumber(rl.remaining);
+						if (!window || limit === null || used === null || remainingRL === null) return null;
+						return {
+							limit,
+							remaining: remainingRL,
+							used,
+							window,
+							reset_at: safeString(rl.reset_at) ?? "",
+						} satisfies RateLimit;
+					})
+					.filter((v: RateLimit | null): v is RateLimit => v !== null)
 			: [];
 
 		const dailyUsage: DailyUsage[] = Array.isArray(data.daily_usage)
@@ -512,12 +745,23 @@ async function updateQuota(
 					actual_cost: Number(day.actual_cost ?? day.cost ?? 0),
 				}))
 			: [];
+
+		// usage.today / usage.total — 对齐 CodexBar 的 totals() 校验
+		let usageToday: UsageTotals | null = null;
+		let usageTotal: UsageTotals | null = null;
+		if (data.usage && typeof data.usage === "object" && !Array.isArray(data.usage)) {
+			usageToday = parseUsageTotals(data.usage.today);
+			usageTotal = parseUsageTotals(data.usage.total);
+		}
+		// 兼容 daily_usage 兜底
 		const latestDay = dailyUsage.at(-1);
-		const todayCost = Number(data.usage?.today?.cost ?? latestDay?.cost ?? 0);
+		const todayCost = Number(usageToday?.cost ?? latestDay?.cost ?? 0);
 		const totalCost = Number(
-			data.usage?.total?.cost ??
-				dailyUsage.reduce((sum, day) => sum + day.cost, 0),
+			usageTotal?.cost ?? dailyUsage.reduce((sum, day) => sum + day.cost, 0),
 		);
+
+		// CodexBar 强调 subscription 的 daily/weekly/monthly 为权威，不从 daily_usage 重建；
+		// 此处保留 daily_usage 仅用于 totalCost 兜底与 /quota 明细，不参与状态栏主窗口计算
 
 		quotaProviders.set(providerId, {
 			baseUrl: usageUrl,
@@ -526,9 +770,18 @@ async function updateQuota(
 			dailyUsage,
 			todayCost,
 			totalCost,
-			status: data.status ?? (data.isValid === true ? "valid" : "unknown"),
-			mode: data.mode ?? "unknown",
+			status: safeString(data.status) ?? (data.isValid === true ? "valid" : "unknown"),
+			mode: safeString(data.mode) ?? "unknown",
 			lastUpdated: Date.now(),
+			quota: quotaParsed,
+			subscription,
+			balance: balance ?? null,
+			unit,
+			planName: planName ?? null,
+			remaining: remaining ?? null,
+			expiresAt,
+			todayUsage: usageToday,
+			totalUsage: usageTotal,
 		});
 		return true;
 	} catch (e) {
@@ -538,15 +791,43 @@ async function updateQuota(
 }
 
 function formatStatusText(providerId: string, info: QuotaInfo): string {
+	// 优先级与 CodexBar 一致：subscription > quota > rate_limits > balance/todayCost
+	// CodexBar sub2api.js: if (subscription) primary=daily, secondary=weekly, tertiary=monthly
+	//                     else if (quota) primary=quota
+	// statusbar 空间紧张，仅展示百分比；金额详情进 /quota
+	if (info.subscription) {
+		const parts: string[] = [];
+		const sub = info.subscription;
+		const dailyPct = subscriptionPercent(sub.dailyUsage, sub.dailyLimit);
+		const weeklyPct = subscriptionPercent(sub.weeklyUsage, sub.weeklyLimit);
+		const monthlyPct = subscriptionPercent(sub.monthlyUsage, sub.monthlyLimit);
+		if (dailyPct !== null) parts.push(`d ${Math.round(dailyPct)}%`);
+		if (weeklyPct !== null) parts.push(`w ${Math.round(weeklyPct)}%`);
+		if (monthlyPct !== null) parts.push(`m ${Math.round(monthlyPct)}%`);
+		if (parts.length) return `● ${providerId} ${parts.join(" · ")}`;
+		// subscription 无 limit 时回落到 rate_limits
+	}
+	if (info.quota && info.quota.limit > 0) {
+		const pct = Math.round((info.quota.used / info.quota.limit) * 100);
+		// quota 模式下 CodexBar 也会展示 rate_limits extraWindows，但 statusbar 只取最紧凑的 quota 百分比
+		// 若同时有 rate_limits，附加一个最满的 window 以保留原有 5h/daily 感知
+		const windows = pickQuotaWindows(info.rateLimits).filter((rl) => rl.limit > 0);
+		if (windows.length) {
+			const windowPct = windows.map(formatUsagePercent).join(" · ");
+			return `● ${providerId} quota ${pct}% · ${windowPct}`;
+		}
+		return `● ${providerId} quota ${pct}%`;
+	}
 	const windows = pickQuotaWindows(info.rateLimits).filter(
 		(rl) => rl.limit > 0,
 	);
 	if (windows.length) {
-		// Footer space is tight: keep detailed dollar values in /quota, and show
-		// compact percentages in the persistent status line to avoid TUI wrapping/flicker.
 		return `● ${providerId} ${windows.map(formatUsagePercent).join(" · ")}`;
 	}
-	return `● ${providerId} d ${formatMoney(info.todayCost)}`;
+	if (info.balance !== null) {
+		return `● ${providerId} ${formatMoneyWithUnit(info.balance, info.unit)}`;
+	}
+	return `● ${providerId} d ${formatMoneyWithUnit(info.todayCost, info.unit)}`;
 }
 
 function debugQuotaLog(message: string): void {
@@ -970,43 +1251,113 @@ export default async function (pi: ExtensionAPI) {
 
 			const fresh = quotaProviders.get(providerId);
 			if (!fresh) return;
-			const latestDay = fresh.dailyUsage.at(-1);
-			const lines = [
-				`Provider:     ${providerId}`,
-				`Status:       ${fresh.status}`,
-				`Mode:         ${fresh.mode}`,
-				`Today Cost:   $${fresh.todayCost.toFixed(4)}`,
-				`Total Cost:   $${fresh.totalCost.toFixed(4)}`,
-				latestDay
-					? `Today Tokens: ${latestDay.total_tokens.toLocaleString()}`
-					: undefined,
-				latestDay
-					? `Requests:     ${latestDay.requests.toLocaleString()}`
-					: undefined,
-				"",
-				"Rate Limits:",
-			].filter((line): line is string => typeof line === "string");
 
+			// Build detailed console layout aligned with CodexBar's usage summary
+			const lines: string[] = [];
+			lines.push(`Provider:     ${providerId}`);
+			if (fresh.planName) lines.push(`Plan:         ${fresh.planName}`);
+			lines.push(`Status:       ${fresh.status}`);
+			lines.push(`Mode:         ${fresh.mode}`);
+			lines.push(`Unit:         ${fresh.unit}`);
+			if (fresh.balance !== null) {
+				lines.push(`Balance:      ${formatMoneyWithUnit(fresh.balance, fresh.unit)}`);
+			}
+			if (fresh.remaining !== null) {
+				lines.push(`Remaining:    ${formatMoneyWithUnit(fresh.remaining, fresh.unit)}`);
+			}
+			if (fresh.expiresAt) {
+				const d = new Date(fresh.expiresAt);
+				lines.push(`Expires:      ${isNaN(d.getTime()) ? fresh.expiresAt : d.toLocaleString()}`);
+			}
+
+			// Quota section (quota-limited key)
+			if (fresh.quota) {
+				const q = fresh.quota;
+				const pct = q.limit > 0 ? Math.round((q.used / q.limit) * 100) : 0;
+				lines.push(`Quota:        ${formatAmount(q.used, q.limit, q.unit)} (${pct}%, remaining ${formatMoneyWithUnit(q.remaining, q.unit)})`);
+			}
+
+			// Subscription section (daily/weekly/monthly) — authoritative per CodexBar docs
+			if (fresh.subscription) {
+				const s = fresh.subscription;
+				lines.push("");
+				lines.push("Subscription (authoritative, not derived from daily_usage):");
+				if (s.dailyLimit !== null) {
+					const pct = s.dailyLimit > 0 ? Math.round((s.dailyUsage / s.dailyLimit) * 100) : 0;
+					lines.push(`  Daily:        ${formatAmount(s.dailyUsage, s.dailyLimit, "USD")} (${pct}%)`);
+				} else {
+					lines.push(`  Daily:        ${formatMoneyWithUnit(s.dailyUsage, "USD")} (no limit)`);
+				}
+				if (s.weeklyLimit !== null) {
+					const pct = s.weeklyLimit > 0 ? Math.round((s.weeklyUsage / s.weeklyLimit) * 100) : 0;
+					lines.push(`  Weekly:       ${formatAmount(s.weeklyUsage, s.weeklyLimit, "USD")} (${pct}%)`);
+				} else {
+					lines.push(`  Weekly:       ${formatMoneyWithUnit(s.weeklyUsage, "USD")} (no limit)`);
+				}
+				if (s.monthlyLimit !== null) {
+					const pct = s.monthlyLimit > 0 ? Math.round((s.monthlyUsage / s.monthlyLimit) * 100) : 0;
+					lines.push(`  Monthly:      ${formatAmount(s.monthlyUsage, s.monthlyLimit, "USD")} (${pct}%)`);
+				} else {
+					lines.push(`  Monthly:      ${formatMoneyWithUnit(s.monthlyUsage, "USD")} (no limit)`);
+				}
+			}
+
+			// Usage summary (today / total) — aligned with CodexBar detail rows
+			// CodexBar 未提供 usage 时不以 daily_usage 派生展示，避免与 subscription 权威值混淆
+			const hasUsageSummary = Boolean(fresh.todayUsage || fresh.totalUsage);
+			if (hasUsageSummary) {
+				lines.push("");
+				lines.push("Usage summary (key-scoped):");
+				if (fresh.todayUsage) {
+					lines.push(
+						`  Today:        ${fresh.todayUsage.requests.toLocaleString()} req · ${fresh.todayUsage.tokens.toLocaleString()} tokens · ${formatMoneyWithUnit(fresh.todayUsage.cost, fresh.unit)}`,
+					);
+				}
+				if (fresh.totalUsage) {
+					lines.push(
+						`  All time:     ${fresh.totalUsage.requests.toLocaleString()} req · ${fresh.totalUsage.tokens.toLocaleString()} tokens · ${formatMoneyWithUnit(fresh.totalUsage.cost, fresh.unit)}`,
+					);
+				}
+			} else if (!fresh.subscription && !fresh.quota && fresh.balance === null) {
+				// 仅当无 subscription/quota/balance 时，fallback 到 daily_usage 兜底展示
+				const hasDaily = fresh.dailyUsage.length > 0;
+				const hasCost = fresh.todayCost !== 0 || fresh.totalCost !== 0;
+				if (hasDaily || hasCost) {
+					lines.push(`Today Cost:   ${formatMoneyWithUnit(fresh.todayCost, fresh.unit)}`);
+					lines.push(`Total Cost:   ${formatMoneyWithUnit(fresh.totalCost, fresh.unit)}`);
+					const latestDay = fresh.dailyUsage.at(-1);
+					if (latestDay) {
+						lines.push(`Today Tokens: ${latestDay.total_tokens.toLocaleString()}`);
+					lines.push(`Requests:     ${latestDay.requests.toLocaleString()}`);
+					}
+				}
+			}
+
+			lines.push("");
+			lines.push("Rate Limits (extraWindows):");
 			if (fresh.rateLimits.length === 0) {
 				lines.push("  none reported by provider");
 			}
-
 			for (const rl of fresh.rateLimits) {
 				const resetDate = rl.reset_at
 					? new Date(rl.reset_at).toLocaleString()
 					: "unknown";
+				// CodexBar rate_limits 金额始终按 USD 展示，与 quota.unit 无关
 				lines.push(
 					`  [${normalizeWindowLabel(rl.window)}]  ${formatMoney(rl.used)}/${formatMoney(rl.limit, 0)}  (remaining: ${formatMoney(rl.remaining)}, resets: ${resetDate})`,
 				);
 			}
 
-			const windows = pickQuotaWindows(fresh.rateLimits).filter(
-				(rl) => rl.limit > 0,
-			);
-			if (windows.length) {
-				ctx.ui.notify(windows.map(formatUsageLimit).join(" • "), "info");
+			// Notify: compact status-aligned string
+			const statusText = formatStatusText(providerId, fresh);
+			// 去掉前缀 ● 后的纯指标用于 toast，避免重复图标
+			const toastText = statusText.replace(/^●\s*\S+\s*/, "");
+			if (fresh.subscription || fresh.quota || fresh.rateLimits.length) {
+				ctx.ui.notify(toastText || statusText, "info");
+			} else if (fresh.balance !== null) {
+				ctx.ui.notify(`Balance: ${formatMoneyWithUnit(fresh.balance, fresh.unit)}`, "info");
 			} else {
-				ctx.ui.notify(`Today: ${formatMoney(fresh.todayCost)}`, "info");
+				ctx.ui.notify(`Today: ${formatMoneyWithUnit(fresh.todayCost, fresh.unit)}`, "info");
 			}
 			console.error(lines.join("\n"));
 		},

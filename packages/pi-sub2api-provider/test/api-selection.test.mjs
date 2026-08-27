@@ -12,7 +12,7 @@ async function runChild() {
 	if (process.env.PI_USAGE_SWITCH_CHILD === "1") {
 		globalThis.fetch = async (input) => {
 			const url = String(input);
-			if (url === "https://example.test/v1/usage") {
+			if (url.startsWith("https://example.test/v1/usage")) {
 				return Response.json({
 					rate_limits: [
 						{ limit: 100, remaining: 75, used: 25, window: "daily" },
