@@ -160,7 +160,7 @@ Inside pi:
 The status bar will show something like:
 
 ```text
-● my-sub2api: 5h $1.23/$10 • daily $4.56/$50 • weekly $12.34/$200
+● my-sub2api d [⣿⣀⡀⡀⡀] · w [⣤⡀⡀⡀⡀]
 ```
 
 ## License

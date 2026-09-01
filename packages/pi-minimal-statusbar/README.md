@@ -7,8 +7,8 @@
 A minimal pi footer that shows only what matters.
 
 ```
-Left:  ~/path/to/project git:branch± • provider/model (thinking) • 12.3 t/s • 1.20s ttft • cache:87% • $1.23/$10 • goal
-Right: [####.........] 40% (128K)
+Left:  ~/path/to/project git:branch± • provider/model (thinking) • goal
+Right: 12.3 t/s • 1.20s ttft • cache:87% • $1.23/$10 • [####.........] 40% (128K)
 ```
 
 Part of the [pi-extensions](https://github.com/dereknex/pi-extensions) monorepo.
@@ -52,6 +52,7 @@ All options are optional; defaults are shown below. Configure under the `minimal
     "showTps": true,
     "showTtft": true,
     "showCacheStats": true,
+    "hideZeroCache": false,
     "showQuota": true,
     "showGoal": true,
     "showContextBar": true,
@@ -72,6 +73,7 @@ All options are optional; defaults are shown below. Configure under the `minimal
 | `showTps` | `true` | Show tokens per second (weighted over generation time, tool time excluded) |
 | `showTtft` | `true` | Show time to first token |
 | `showCacheStats` | `true` | Show session-cumulative cache hit rate (matches /session) |
+| `hideZeroCache` | `false` | Hide cache stats when cache hit rate is 0% |
 | `showQuota` | `true` | Show quota status from other extensions |
 | `showGoal` | `true` | Show the goal status entry |
 | `showContextBar` | `true` | Show context usage bar |

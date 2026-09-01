@@ -5,7 +5,7 @@
  * into the pi-extensions monorepo as the `pi-minimal-statusbar` package.
  *
  * Left:  ~/path/to/project git:branch± • model (thinking) • goal
- * Right: [####.........] 40% (128K)
+ * Right: 12.3 t/s • 1.20s ttft • cache:87% • $1.23 • [####.........] 40% (128K)
  {
       "minimal-footer": {
         "showCwd": true,
@@ -15,6 +15,7 @@
         "showTps": true,
         "showTtft": true,
         "showCacheStats": true,
+        "hideZeroCache": false,
         "showQuota": true,
         "showGoal": true,
         "showContextBar": true,
@@ -96,6 +97,7 @@ interface FooterSettings {
 	showTps?: boolean;
 	showTtft?: boolean;
 	showCacheStats?: boolean;
+	hideZeroCache?: boolean;
 	showQuota?: boolean;
 	showGoal?: boolean;
 	showContextBar?: boolean;
@@ -605,10 +607,13 @@ export default function (pi: FooterExtensionAPI) {
 						sessionCacheRead,
 						sessionCacheWrite,
 					);
-					const cacheStr =
-						footerSettings.showCacheStats !== false && cacheHitRate !== null
-							? theme.fg("muted", `cache:${cacheHitRate}%`)
-							: "";
+					const showCache =
+						footerSettings.showCacheStats !== false &&
+						cacheHitRate !== null &&
+						(!footerSettings.hideZeroCache || cacheHitRate > 0);
+					const cacheStr = showCache
+						? theme.fg("muted", `cache:${cacheHitRate}%`)
+						: "";
 
 					// ── Optional extension indicators ──
 					const statuses = getExtensionStatusEntries(
@@ -657,10 +662,6 @@ export default function (pi: FooterExtensionAPI) {
 							? theme.fg(branchColor, branchStr)
 							: "",
 						footerSettings.showModel !== false ? modelStr + thinkLabel : "",
-						tpsStr,
-						ttftStr,
-						cacheStr,
-						quotaStr,
 						goalStr,
 						...otherStrs,
 					].filter(Boolean);
@@ -690,21 +691,36 @@ export default function (pi: FooterExtensionAPI) {
 							? `(${formatContextWindow(contextWindow)})`
 							: "";
 
-					const rightParts: string[] = [];
+					const usageParts = [
+						tpsStr,
+						ttftStr,
+						cacheStr,
+						quotaStr,
+					].filter(Boolean);
+
+					const contextParts: string[] = [];
 					if (footerSettings.showContextBar !== false) {
-						rightParts.push(colorRgb("[", ctxRgb) + bar + colorRgb("]", ctxRgb));
+						contextParts.push(colorRgb("[", ctxRgb) + bar + colorRgb("]", ctxRgb));
 					}
 					if (pctStr) {
-						rightParts.push(colorRgb(pctStr, ctxRgb));
+						contextParts.push(colorRgb(pctStr, ctxRgb));
 					}
 					if (ctxWinStr) {
-						rightParts.push(
+						contextParts.push(
 							pct >= 75
 								? colorRgb(ctxWinStr, ctxRgb)
 								: theme.fg("dim", ctxWinStr),
 						);
 					}
-					const right = rightParts.join(" ");
+
+					const rightParts: string[] = [];
+					if (usageParts.length > 0) {
+						rightParts.push(usageParts.join(theme.fg("dim", " • ")));
+					}
+					if (contextParts.length > 0) {
+						rightParts.push(contextParts.join(" "));
+					}
+					const right = rightParts.join(theme.fg("dim", " • "));
 
 					// ── Layout: single row if it fits, else split into two ──
 					const leftW = visibleWidth(left);

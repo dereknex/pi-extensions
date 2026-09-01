@@ -7,8 +7,8 @@
 极简 pi 状态栏（footer）：只展示重要信息。
 
 ```
-左：~/path/to/project git:branch± • provider/model (thinking) • 12.3 t/s • 1.20s ttft • cache:87% • $1.23/$10 • goal
-右：[####.........] 40% (128K)
+左：~/path/to/project git:branch± • provider/model (thinking) • goal
+右：12.3 t/s • 1.20s ttft • cache:87% • $1.23/$10 • [####.........] 40% (128K)
 ```
 
 隶属于 [pi-extensions](https://github.com/dereknex/pi-extensions) monorepo。
@@ -52,6 +52,7 @@ pi install npm:pi-minimal-statusbar
     "showTps": true,
     "showTtft": true,
     "showCacheStats": true,
+    "hideZeroCache": false,
     "showQuota": true,
     "showGoal": true,
     "showContextBar": true,
@@ -72,6 +73,7 @@ pi install npm:pi-minimal-statusbar
 | `showTps` | `true` | 显示每秒 tokens（按生成时长加权，不含工具执行时间） |
 | `showTtft` | `true` | 显示首字延迟 |
 | `showCacheStats` | `true` | 显示会话累计缓存命中率（与 /session 一致） |
+| `hideZeroCache` | `false` | 缓存命中率为 0% 时自动隐藏 |
 | `showQuota` | `true` | 显示其他扩展的额度状态 |
 | `showGoal` | `true` | 显示 goal 状态 |
 | `showContextBar` | `true` | 显示上下文使用条 |

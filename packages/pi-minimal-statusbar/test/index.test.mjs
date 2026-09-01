@@ -178,3 +178,87 @@ test("model or provider selection resets performance and cache metrics", async (
 		else process.env.HOME = realHome;
 	}
 });
+
+test("quota and context are positioned at the tail / right side", async () => {
+	const realHome = process.env.HOME;
+	process.env.HOME = "/tmp/pi-minimal-statusbar-test-home";
+	try {
+		const handlers = {};
+		let footer;
+		const tui = { requestRender() {} };
+		const theme = {
+			fg(_color, text) {
+				return text;
+			},
+			bold(text) {
+				return text;
+			},
+		};
+		const extensionStatuses = new Map([
+			["quota:anthropic", "$1.50/$10"],
+			["goal", "fix-bug"],
+		]);
+		const footerData = {
+			onBranchChange() {
+				return () => {};
+			},
+			getGitBranch() {
+				return "main";
+			},
+			getExtensionStatuses() {
+				return extensionStatuses;
+			},
+		};
+		const pi = {
+			cwd: "/tmp/project",
+			on(event, handler) {
+				handlers[event] = handler;
+			},
+			getThinkingLevel() {
+				return "off";
+			},
+			exec() {
+				return Promise.resolve({ code: 0, stdout: "" });
+			},
+		};
+		const ctx = {
+			cwd: "/tmp/project",
+			model: {
+				id: "claude-3-7-sonnet",
+				provider: "anthropic",
+				contextWindow: 200_000,
+			},
+			sessionManager: {
+				getEntries() {
+					return [];
+				},
+			},
+			ui: {
+				setFooter(factory) {
+					footer = factory(tui, theme, footerData);
+				},
+			},
+			getContextUsage() {
+				return { percent: 42 };
+			},
+		};
+
+		loadExtension(pi);
+		await handlers.session_start({}, ctx);
+
+		// In narrow width (forces two rows):
+		// Row 0 should have identity/state (path, branch, model, goal)
+		// Row 1 should have tail usage/quota and context bar/percent
+		const rows = footer.render(30);
+		assert.equal(rows.length, 2);
+		assert.match(rows[0], /project/);
+		assert.match(rows[0], /git:main/);
+		assert.match(rows[0], /fix-bug/);
+		assert.match(rows[1], /\$1\.50\/\$10/);
+		assert.match(rows[1], /42%/);
+		assert.match(rows[1], /200K/);
+	} finally {
+		if (realHome === undefined) delete process.env.HOME;
+		else process.env.HOME = realHome;
+	}
+});

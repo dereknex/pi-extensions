@@ -54,6 +54,7 @@ async function runChild() {
 			await new Promise((resolve) => setTimeout(resolve, 10));
 		}
 		assert.match(statuses.at(-1) ?? "", /test/);
+		assert.match(statuses.at(-1) ?? "", /\[[⡀⣀⣤⣶⣿]{5}\]/);
 
 		ctx.model = { provider: "other", id: "other-model" };
 		handlers.model_select({ model: ctx.model }, ctx);
@@ -227,6 +228,18 @@ if (process.env.PI_API_SELECTION_CHILD === "1") {
 			usageSwitch: true,
 		});
 		assert.equal(usageSwitch.stdout, "usage-cleared-on-model-switch");
+		const { renderProgressBar } = await import(
+			pathToFileURL(compiledExtension).href
+		);
+		assert.equal(renderProgressBar(0, 5), "[⡀⡀⡀⡀⡀]");
+		assert.equal(renderProgressBar(25, 5), "[⣿⣀⡀⡀⡀]");
+		assert.equal(renderProgressBar(50, 5), "[⣿⣿⣤⡀⡀]");
+		assert.equal(renderProgressBar(75, 5), "[⣿⣿⣿⣶⡀]");
+		assert.equal(renderProgressBar(100, 5), "[⣿⣿⣿⣿⣿]");
+		assert.equal(renderProgressBar(25, 10), "[⣿⣿⣤⡀⡀⡀⡀⡀⡀⡀]");
+		assert.equal(renderProgressBar(150, 5), "[⣿⣿⣿⣿⣿]");
+		assert.equal(renderProgressBar(-10, 5), "[⡀⡀⡀⡀⡀]");
+
 		console.log("API adapter selection, model probing, and usage reset passed");
 	} finally {
 		fs.rmSync(buildDir, { recursive: true, force: true });

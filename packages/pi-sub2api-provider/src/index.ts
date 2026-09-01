@@ -521,9 +521,34 @@ function shortWindowLabel(window: string): string {
 	return label;
 }
 
+const BRAILLE_STEPS = ["⡀", "⣀", "⣤", "⣶", "⣿"] as const;
+
+export function renderProgressBar(percent: number, width = 5): string {
+	const clamped = Math.max(0, Math.min(100, percent));
+	const levelsPerCell = BRAILLE_STEPS.length - 1;
+	const maxSteps = width * levelsPerCell;
+	const totalSteps = Math.max(
+		0,
+		Math.min(maxSteps, Math.round((clamped / 100) * maxSteps)),
+	);
+	const fullCells = Math.floor(totalSteps / levelsPerCell);
+	const remainder = totalSteps % levelsPerCell;
+
+	let bar = "⣿".repeat(fullCells);
+	if (fullCells < width) {
+		if (remainder > 0) {
+			bar += BRAILLE_STEPS[remainder];
+			bar += "⡀".repeat(width - fullCells - 1);
+		} else {
+			bar += "⡀".repeat(width - fullCells);
+		}
+	}
+	return `[${bar}]`;
+}
+
 function formatUsagePercent(rl: RateLimit): string {
 	const percent = rl.limit > 0 ? Math.round((rl.used / rl.limit) * 100) : 0;
-	return `${shortWindowLabel(rl.window)} ${percent}%`;
+	return `${shortWindowLabel(rl.window)} ${renderProgressBar(percent)}`;
 }
 
 function pickQuotaWindows(rateLimits: RateLimit[]): RateLimit[] {
@@ -794,16 +819,16 @@ function formatStatusText(providerId: string, info: QuotaInfo): string {
 	// 优先级与 CodexBar 一致：subscription > quota > rate_limits > balance/todayCost
 	// CodexBar sub2api.js: if (subscription) primary=daily, secondary=weekly, tertiary=monthly
 	//                     else if (quota) primary=quota
-	// statusbar 空间紧张，仅展示百分比；金额详情进 /quota
+	// statusbar 空间紧张，展示进度条与百分比；金额详情进 /quota
 	if (info.subscription) {
 		const parts: string[] = [];
 		const sub = info.subscription;
 		const dailyPct = subscriptionPercent(sub.dailyUsage, sub.dailyLimit);
 		const weeklyPct = subscriptionPercent(sub.weeklyUsage, sub.weeklyLimit);
 		const monthlyPct = subscriptionPercent(sub.monthlyUsage, sub.monthlyLimit);
-		if (dailyPct !== null) parts.push(`d ${Math.round(dailyPct)}%`);
-		if (weeklyPct !== null) parts.push(`w ${Math.round(weeklyPct)}%`);
-		if (monthlyPct !== null) parts.push(`m ${Math.round(monthlyPct)}%`);
+		if (dailyPct !== null) parts.push(`d ${renderProgressBar(dailyPct)}`);
+		if (weeklyPct !== null) parts.push(`w ${renderProgressBar(weeklyPct)}`);
+		if (monthlyPct !== null) parts.push(`m ${renderProgressBar(monthlyPct)}`);
 		if (parts.length) return `● ${providerId} ${parts.join(" · ")}`;
 		// subscription 无 limit 时回落到 rate_limits
 	}
@@ -814,9 +839,9 @@ function formatStatusText(providerId: string, info: QuotaInfo): string {
 		const windows = pickQuotaWindows(info.rateLimits).filter((rl) => rl.limit > 0);
 		if (windows.length) {
 			const windowPct = windows.map(formatUsagePercent).join(" · ");
-			return `● ${providerId} quota ${pct}% · ${windowPct}`;
+			return `● ${providerId} quota ${renderProgressBar(pct)} · ${windowPct}`;
 		}
-		return `● ${providerId} quota ${pct}%`;
+		return `● ${providerId} quota ${renderProgressBar(pct)}`;
 	}
 	const windows = pickQuotaWindows(info.rateLimits).filter(
 		(rl) => rl.limit > 0,
@@ -1274,7 +1299,7 @@ export default async function (pi: ExtensionAPI) {
 			if (fresh.quota) {
 				const q = fresh.quota;
 				const pct = q.limit > 0 ? Math.round((q.used / q.limit) * 100) : 0;
-				lines.push(`Quota:        ${formatAmount(q.used, q.limit, q.unit)} (${pct}%, remaining ${formatMoneyWithUnit(q.remaining, q.unit)})`);
+				lines.push(`Quota:        ${formatAmount(q.used, q.limit, q.unit)} ${renderProgressBar(pct, 10)} (remaining ${formatMoneyWithUnit(q.remaining, q.unit)})`);
 			}
 
 			// Subscription section (daily/weekly/monthly) — authoritative per CodexBar docs
@@ -1284,19 +1309,19 @@ export default async function (pi: ExtensionAPI) {
 				lines.push("Subscription (authoritative, not derived from daily_usage):");
 				if (s.dailyLimit !== null) {
 					const pct = s.dailyLimit > 0 ? Math.round((s.dailyUsage / s.dailyLimit) * 100) : 0;
-					lines.push(`  Daily:        ${formatAmount(s.dailyUsage, s.dailyLimit, "USD")} (${pct}%)`);
+					lines.push(`  Daily:        ${formatAmount(s.dailyUsage, s.dailyLimit, "USD")} ${renderProgressBar(pct, 10)}`);
 				} else {
 					lines.push(`  Daily:        ${formatMoneyWithUnit(s.dailyUsage, "USD")} (no limit)`);
 				}
 				if (s.weeklyLimit !== null) {
 					const pct = s.weeklyLimit > 0 ? Math.round((s.weeklyUsage / s.weeklyLimit) * 100) : 0;
-					lines.push(`  Weekly:       ${formatAmount(s.weeklyUsage, s.weeklyLimit, "USD")} (${pct}%)`);
+					lines.push(`  Weekly:       ${formatAmount(s.weeklyUsage, s.weeklyLimit, "USD")} ${renderProgressBar(pct, 10)}`);
 				} else {
 					lines.push(`  Weekly:       ${formatMoneyWithUnit(s.weeklyUsage, "USD")} (no limit)`);
 				}
 				if (s.monthlyLimit !== null) {
 					const pct = s.monthlyLimit > 0 ? Math.round((s.monthlyUsage / s.monthlyLimit) * 100) : 0;
-					lines.push(`  Monthly:      ${formatAmount(s.monthlyUsage, s.monthlyLimit, "USD")} (${pct}%)`);
+					lines.push(`  Monthly:      ${formatAmount(s.monthlyUsage, s.monthlyLimit, "USD")} ${renderProgressBar(pct, 10)}`);
 				} else {
 					lines.push(`  Monthly:      ${formatMoneyWithUnit(s.monthlyUsage, "USD")} (no limit)`);
 				}
@@ -1342,9 +1367,10 @@ export default async function (pi: ExtensionAPI) {
 				const resetDate = rl.reset_at
 					? new Date(rl.reset_at).toLocaleString()
 					: "unknown";
+				const pct = rl.limit > 0 ? Math.round((rl.used / rl.limit) * 100) : 0;
 				// CodexBar rate_limits 金额始终按 USD 展示，与 quota.unit 无关
 				lines.push(
-					`  [${normalizeWindowLabel(rl.window)}]  ${formatMoney(rl.used)}/${formatMoney(rl.limit, 0)}  (remaining: ${formatMoney(rl.remaining)}, resets: ${resetDate})`,
+					`  [${normalizeWindowLabel(rl.window)}]  ${formatMoney(rl.used)}/${formatMoney(rl.limit, 0)} ${renderProgressBar(pct, 10)} (remaining: ${formatMoney(rl.remaining)}, resets: ${resetDate})`,
 				);
 			}
 
