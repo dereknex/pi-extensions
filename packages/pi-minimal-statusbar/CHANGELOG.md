@@ -1,5 +1,11 @@
 # pi-minimal-statusbar
 
+## 0.1.5
+
+### Patch Changes
+
+- 7953458: Add adaptive responsive folding on narrow viewports to strictly prevent multi-row wrapping and maintain a single-line layout.
+
 ## 0.1.4
 
 ### Patch Changes
