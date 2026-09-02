@@ -24,7 +24,7 @@ const tsSource = tsSourceOriginal
 	)
 	.replace(
 		'import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";',
-		'const truncateToWidth = (text) => text;\nconst visibleWidth = (text) => text.length;',
+		'const truncateToWidth = (text) => text;\nconst visibleWidth = (text) => text.replace(/\\x1b\\[[0-9;]*m/g, "").length;',
 	);
 const { outputText } = ts.transpileModule(tsSource, {
 	compilerOptions: {
@@ -246,17 +246,133 @@ test("quota and context are positioned at the tail / right side", async () => {
 		loadExtension(pi);
 		await handlers.session_start({}, ctx);
 
-		// In narrow width (forces two rows):
-		// Row 0 should have identity/state (path, branch, model, goal)
-		// Row 1 should have tail usage/quota and context bar/percent
-		const rows = footer.render(30);
-		assert.equal(rows.length, 2);
-		assert.match(rows[0], /project/);
-		assert.match(rows[0], /git:main/);
-		assert.match(rows[0], /fix-bug/);
-		assert.match(rows[1], /\$1\.50\/\$10/);
-		assert.match(rows[1], /42%/);
-		assert.match(rows[1], /200K/);
+		// Wide width (200): stays single row with full information
+		const wideRows = footer.render(200);
+		assert.equal(wideRows.length, 1);
+		assert.match(wideRows[0], /project/);
+		assert.match(wideRows[0], /git:main/);
+		assert.match(wideRows[0], /fix-bug/);
+		assert.match(wideRows[0], /\$1\.50\/\$10/);
+		assert.match(wideRows[0], /42%/);
+		assert.match(wideRows[0], /200K/);
+
+		// Narrow width (30): adapts to stay strictly single row without wrapping
+		const narrowRows = footer.render(30);
+		assert.equal(narrowRows.length, 1);
+		assert.match(narrowRows[0], /project/);
+	} finally {
+		if (realHome === undefined) delete process.env.HOME;
+		else process.env.HOME = realHome;
+	}
+});
+
+test("adaptive degradation stages progressively fold elements to stay single line", async () => {
+	const realHome = process.env.HOME;
+	process.env.HOME = "/tmp/pi-minimal-statusbar-test-home";
+	try {
+		const handlers = {};
+		let footer;
+		const tui = { requestRender() {} };
+		const theme = {
+			fg(_color, text) {
+				return text;
+			},
+			bold(text) {
+				return text;
+			},
+		};
+		const extensionStatuses = new Map([
+			["quota:anthropic", "$1.50/$10"],
+			["goal", "fix-bug"],
+			["extra-plugin", "syncing"],
+		]);
+		const footerData = {
+			onBranchChange() {
+				return () => {};
+			},
+			getGitBranch() {
+				return "feature/my-branch";
+			},
+			getExtensionStatuses() {
+				return extensionStatuses;
+			},
+		};
+		const pi = {
+			cwd: "/Users/username/workspace/my-project",
+			on(event, handler) {
+				handlers[event] = handler;
+			},
+			getThinkingLevel() {
+				return "high";
+			},
+			exec() {
+				return Promise.resolve({ code: 0, stdout: "" });
+			},
+		};
+		const ctx = {
+			cwd: "/Users/username/workspace/my-project",
+			model: {
+				id: "claude-3-7-sonnet",
+				provider: "anthropic",
+				contextWindow: 200_000,
+				reasoning: true,
+			},
+			sessionManager: {
+				getEntries() {
+					return [];
+				},
+			},
+			ui: {
+				setFooter(factory) {
+					footer = factory(tui, theme, footerData);
+				},
+			},
+			getContextUsage() {
+				return { percent: 50 };
+			},
+		};
+
+		loadExtension(pi);
+		await handlers.session_start({}, ctx);
+
+		const realDateNow = Date.now;
+		let now = 1000;
+		Date.now = () => now;
+		try {
+			handlers.message_start({ message: { role: "assistant" } });
+			now = 1100;
+			handlers.message_update({
+				message: { role: "assistant" },
+				assistantMessageEvent: { type: "text_delta" },
+			});
+			now = 2100;
+			handlers.message_end({
+				message: {
+					role: "assistant",
+					usage: { input: 1000, cacheRead: 4000, cacheWrite: 0, output: 500 },
+				},
+			});
+
+			// 1. Ultra wide (250 chars): full path, ttft, tps, 10-block bar, extra status, thinking level
+			const r250 = footer.render(250);
+			assert.equal(r250.length, 1);
+			const stripAnsi = (text) => text.replace(/\x1b\[[0-9;]*m/g, "");
+			const plain250 = stripAnsi(r250[0]);
+			assert.match(plain250, /ttft/);
+			assert.match(plain250, /t\/s/);
+			assert.match(plain250, /cache:/);
+			assert.match(plain250, /syncing/);
+			assert.match(plain250, /\[#####\.\.\.\.\.\]/);
+			assert.match(plain250, /\(high\)/);
+
+			// 2. Narrower widths: always 1 single row
+			for (const w of [120, 80, 50, 25, 10]) {
+				const rows = footer.render(w);
+				assert.equal(rows.length, 1);
+			}
+		} finally {
+			Date.now = realDateNow;
+		}
 	} finally {
 		if (realHome === undefined) delete process.env.HOME;
 		else process.env.HOME = realHome;

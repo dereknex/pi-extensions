@@ -22,7 +22,7 @@
 - 实时 tokens/s（按生成时长加权的本次运行吞吐，不含工具执行时间）、首字延迟（ttft）、会话累计缓存命中率（与 /session 一致）。
 - 其他扩展的额度状态（如 [pi-sub2api-provider](https://www.npmjs.com/package/pi-sub2api-provider)）与任意 `ctx.ui.setStatus()` 扩展状态。
 - 上下文使用条，颜色渐变（绿 → 黄 → 橙 → 红）。
-- 单行放不下时自动拆成两行。
+- 自适应响应式折叠：终端空间不足时按优先级自动降级折叠次要字段，杜绝换行，始终保持单行。
 
 ## 安装
 

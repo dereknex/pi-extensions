@@ -651,23 +651,19 @@ export default function (pi: FooterExtensionAPI) {
 					const lastSlash = cwd.lastIndexOf("/");
 					const pathPrefix = lastSlash >= 0 ? cwd.slice(0, lastSlash + 1) : "";
 					const projectName = lastSlash >= 0 ? cwd.slice(lastSlash + 1) : cwd;
-					const pathStr = projectName
+					const fullPathStr = projectName
 						? theme.fg("dim", pathPrefix) +
 							theme.fg("accent", theme.bold(projectName))
 						: theme.fg("dim", cwd);
+					const compactPathStr = projectName
+						? theme.fg("accent", theme.bold(projectName))
+						: theme.fg("dim", cwd);
 
-					const leftParts = [
-						footerSettings.showCwd !== false ? pathStr : "",
-						footerSettings.showGit !== false && branchStr
-							? theme.fg(branchColor, branchStr)
-							: "",
-						footerSettings.showModel !== false ? modelStr + thinkLabel : "",
-						goalStr,
-						...otherStrs,
-					].filter(Boolean);
-					const left = leftParts.join(theme.fg("dim", " • "));
+					const branchStyled = branchStr
+						? theme.fg(branchColor, branchStr)
+						: "";
 
-					// ── Context bar ──
+					// ── Context usage ──
 					const usage = ctx.getContextUsage();
 					const pct = usage?.percent ?? 0;
 					const pctStr =
@@ -677,63 +673,106 @@ export default function (pi: FooterExtensionAPI) {
 							: "";
 
 					const ctxRgb = interpolateColor(pct / 100, CONTEXT_COLOR_STOPS);
-
-					const BLOCKS = 10;
-					const filled = Math.max(
-						0,
-						Math.min(BLOCKS, Math.round((pct / 100) * BLOCKS)),
-					);
-					const bar =
-						colorRgb("#".repeat(filled), ctxRgb) +
-						theme.fg("dim", ".".repeat(BLOCKS - filled));
 					const ctxWinStr =
 						footerSettings.showContextWindowSize !== false && contextWindow
 							? `(${formatContextWindow(contextWindow)})`
 							: "";
 
-					const usageParts = [
-						tpsStr,
-						ttftStr,
-						cacheStr,
-						quotaStr,
-					].filter(Boolean);
-
-					const contextParts: string[] = [];
-					if (footerSettings.showContextBar !== false) {
-						contextParts.push(colorRgb("[", ctxRgb) + bar + colorRgb("]", ctxRgb));
-					}
-					if (pctStr) {
-						contextParts.push(colorRgb(pctStr, ctxRgb));
-					}
-					if (ctxWinStr) {
-						contextParts.push(
-							pct >= 75
-								? colorRgb(ctxWinStr, ctxRgb)
-								: theme.fg("dim", ctxWinStr),
+					function makeContextBar(blocks: number): string {
+						if (blocks <= 0 || footerSettings.showContextBar === false)
+							return "";
+						const filled = Math.max(
+							0,
+							Math.min(blocks, Math.round((pct / 100) * blocks)),
 						);
+						const bar =
+							colorRgb("#".repeat(filled), ctxRgb) +
+							theme.fg("dim", ".".repeat(blocks - filled));
+						return colorRgb("[", ctxRgb) + bar + colorRgb("]", ctxRgb);
 					}
 
-					const rightParts: string[] = [];
-					if (usageParts.length > 0) {
-						rightParts.push(usageParts.join(theme.fg("dim", " • ")));
-					}
-					if (contextParts.length > 0) {
-						rightParts.push(contextParts.join(" "));
-					}
-					const right = rightParts.join(theme.fg("dim", " • "));
+					// ── Adaptive Responsive Line Assembly (stays strictly single row) ──
+					function assembleLine(stage: number): { line: string; width: number } {
+						const path =
+							footerSettings.showCwd !== false
+								? stage === 0
+									? fullPathStr
+									: compactPathStr
+								: "";
 
-					// ── Layout: single row if it fits, else split into two ──
-					const leftW = visibleWidth(left);
-					const rightW = visibleWidth(right);
+						const branch =
+							stage < 5 && footerSettings.showGit !== false
+								? branchStyled
+								: "";
 
-					if (leftW + rightW <= width) {
-						// Single row: left … right
-						const pad = " ".repeat(width - leftW - rightW);
-						return [truncateToWidth(left + pad + right, width)];
+						const modelDisplay =
+							footerSettings.showModel !== false
+								? modelStr + (stage < 3 ? thinkLabel : "")
+								: "";
+
+						const goal =
+							stage < 4 && footerSettings.showGoal !== false ? goalStr : "";
+
+						const others = stage < 2 ? otherStrs : [];
+
+						const leftParts = [
+							path,
+							branch,
+							modelDisplay,
+							goal,
+							...others,
+						].filter(Boolean);
+						const left = leftParts.join(theme.fg("dim", " • "));
+
+						const usageParts: string[] = [];
+						if (stage < 2 && tpsStr) usageParts.push(tpsStr);
+						if (stage < 1 && ttftStr) usageParts.push(ttftStr);
+						if (stage < 3 && cacheStr) usageParts.push(cacheStr);
+						if (stage < 4 && quotaStr) usageParts.push(quotaStr);
+
+						const contextParts: string[] = [];
+						const barBlocks = stage === 0 ? 10 : stage === 1 ? 5 : 0;
+						const barStr = makeContextBar(barBlocks);
+						if (barStr) contextParts.push(barStr);
+						if (pctStr) contextParts.push(colorRgb(pctStr, ctxRgb));
+						if (stage < 3 && ctxWinStr) {
+							contextParts.push(
+								pct >= 75
+									? colorRgb(ctxWinStr, ctxRgb)
+									: theme.fg("dim", ctxWinStr),
+							);
+						}
+
+						const rightParts: string[] = [];
+						if (usageParts.length > 0) {
+							rightParts.push(usageParts.join(theme.fg("dim", " • ")));
+						}
+						if (contextParts.length > 0) {
+							rightParts.push(contextParts.join(" "));
+						}
+						const right = rightParts.join(theme.fg("dim", " • "));
+
+						const leftW = visibleWidth(left);
+						const rightW = visibleWidth(right);
+
+						if (!left && !right) return { line: "", width: 0 };
+						if (!left) {
+							const pad = " ".repeat(Math.max(0, width - rightW));
+							return { line: pad + right, width: rightW };
+						}
+						if (!right) return { line: left, width: leftW };
+
+						const totalW = leftW + rightW + 1;
+						const pad = " ".repeat(Math.max(1, width - leftW - rightW));
+						return { line: left + pad + right, width: totalW };
 					}
 
-					// Two rows: left on top, context bar left-aligned below
-					return [truncateToWidth(left, width), truncateToWidth(right, width)];
+					let result = assembleLine(0);
+					for (let stage = 1; stage <= 5 && result.width > width; stage++) {
+						result = assembleLine(stage);
+					}
+
+					return [truncateToWidth(result.line, width)];
 				},
 			};
 		});

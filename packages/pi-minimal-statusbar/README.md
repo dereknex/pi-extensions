@@ -22,7 +22,7 @@ Part of the [pi-extensions](https://github.com/dereknex/pi-extensions) monorepo.
 - Real-time tokens/s (run-weighted generation throughput, tool time excluded), time-to-first-token, and session-cumulative cache hit rate (matches /session).
 - Quota status from other extensions (e.g. [pi-sub2api-provider](https://www.npmjs.com/package/pi-sub2api-provider)) and arbitrary extension statuses via `ctx.ui.setStatus()`.
 - Context usage bar with color gradient (green → yellow → orange → red).
-- Layout falls back to two rows when the single row does not fit the terminal width.
+- Adaptive responsive layout: dynamically folds low-priority elements on narrow terminals to strictly prevent wrapping and stay on a single line.
 
 ## Installation
 
