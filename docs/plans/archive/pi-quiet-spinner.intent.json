@@ -1,0 +1,42 @@
+{
+  "contract": "assurance_kernel/task_intent/v1",
+  "task_id": "pi-quiet-spinner",
+  "goal": "Ship the existing pi-tui spinner CPU workaround as the standalone published workspace package `pi-quiet-spinner`, with one environment-driven preset knob that binds spinner style to refresh rate while defaulting to today's behavior.",
+  "acceptance": [
+    {
+      "id": "A1",
+      "assertion": "The package resolves `PI_QUIET_SPINNER` and its two override variables into the documented options: an unset or empty configuration resolves to the `quiet` preset (four frames, 1000 ms), `still` resolves to exactly one frame, `calm` to eight frames at 400 ms, and `default` to no patch at all; an explicit `PI_QUIET_SPINNER_INTERVAL_MS` or `PI_QUIET_SPINNER_FRAMES` overrides the preset value even under `default`; and an unknown preset, a non-positive or non-integer interval, or an empty frame list fails with the offending value named in the error message.",
+      "verification": "{\"contract\":\"assurance_kernel/verification_descriptor/v1\",\"runner_id\":\"bun\",\"runner_version\":\"1.4.2\",\"argv\":[\"run\",\"packages/pi-quiet-spinner/test/options.test.mjs\"],\"cwd\":\".\",\"timeout_ms\":30000,\"max_output_bytes\":32768}"
+    },
+    {
+      "id": "A2",
+      "assertion": "The package's prototype patch applies the resolved options to a `Loader`-shaped object: a loader whose interval is already slower than the configured floor keeps its own interval, a loader at the upstream default is raised to the floor, the frame override is applied to a loader that passed no explicit indicator while that loader's verbatim-rendering flag stays unchanged, installing the patch twice neither stacks wrappers nor changes behavior, and a prototype that does not expose the patched method fails at activation.",
+      "verification": "{\"contract\":\"assurance_kernel/verification_descriptor/v1\",\"runner_id\":\"bun\",\"runner_version\":\"1.4.2\",\"argv\":[\"run\",\"packages/pi-quiet-spinner/test/patch.test.mjs\"],\"cwd\":\".\",\"timeout_ms\":30000,\"max_output_bytes\":32768}"
+    },
+    {
+      "id": "A3",
+      "assertion": "The package manifest and documentation declare the published contract: name `pi-quiet-spinner`, the `pi.extensions` entry, the `check`, `test` and `pack:dry-run` scripts, the published `files` list, `publishConfig`, the Node engine floor, every preset and environment variable with its default, the process-wide effect of the patch, and the exit plan for the upstream workaround; a changeset and the root README package-table entry exist.",
+      "verification": "{\"contract\":\"assurance_kernel/verification_descriptor/v1\",\"runner_id\":\"bun\",\"runner_version\":\"1.4.2\",\"argv\":[\"run\",\"packages/pi-quiet-spinner/test/package.test.mjs\"],\"cwd\":\".\",\"timeout_ms\":30000,\"max_output_bytes\":32768}"
+    }
+  ],
+  "scope_hint": [
+    ".changeset/quiet-spinner-package.md",
+    "README.md",
+    "docs/specs/archive/pi-quiet-spinner.spec.md",
+    "docs/specs/pi-quiet-spinner.spec.md",
+    "package-lock.json",
+    "packages/pi-quiet-spinner/CHANGELOG.md",
+    "packages/pi-quiet-spinner/LICENSE",
+    "packages/pi-quiet-spinner/README.md",
+    "packages/pi-quiet-spinner/package.json",
+    "packages/pi-quiet-spinner/src/index.ts",
+    "packages/pi-quiet-spinner/test/_load-src.mjs",
+    "packages/pi-quiet-spinner/test/options.test.mjs",
+    "packages/pi-quiet-spinner/test/package.test.mjs",
+    "packages/pi-quiet-spinner/test/patch.test.mjs",
+    "packages/pi-quiet-spinner/tsconfig.json"
+  ],
+  "risk": "material",
+  "revision": 3,
+  "owner": "user"
+}

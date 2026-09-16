@@ -1,0 +1,58 @@
+{
+  "name": "pi-quiet-spinner",
+  "version": "0.0.0",
+  "description": "Pi extension that floors pi-tui spinner frame intervals to cut the CPU cost of full-transcript redraws.",
+  "type": "module",
+  "license": "MIT",
+  "author": "dereknex",
+  "homepage": "https://github.com/dereknex/pi-extensions#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dereknex/pi-extensions.git"
+  },
+  "bugs": {
+    "url": "https://github.com/dereknex/pi-extensions/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "spinner",
+    "cpu",
+    "tui"
+  ],
+  "files": [
+    "src",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "package.json"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "node test/options.test.mjs && node test/patch.test.mjs && node test/package.test.mjs",
+    "pack:dry-run": "npm pack --dry-run",
+    "clean": "rm -rf node_modules"
+  },
+  "dependencies": {
+    "@earendil-works/pi-tui": "^0.84.1"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.84.1",
+    "@types/node": "^24.12.4",
+    "typescript": "^5.9.3"
+  }
+}

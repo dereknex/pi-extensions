@@ -64,7 +64,7 @@ No unresolved user decision remains; BR-Q-1 and BR-Q-2 are resolved by BR-DEC-7 
 ### Decisions
 
 1. Style and refresh rate are bound into one preset rather than exposed as two independent knobs, because redraw cost scales with frames per second while the visual quality of a slow spinner depends on the cycle length. Presets: `still` (one frame, no timer), `quiet` (four frames, 1000 ms, default), `calm` (eight frames, 400 ms), `default` (no patch; upstream 80 ms and ten frames). The frames for the animated presets are prefixes of the upstream braille cycle, so no new glyph vocabulary is introduced.
-2. Configuration is read from the process environment at activation: `PI_QUIET_SPINNER` selects a preset, `PI_QUIET_SPINNER_INTERVAL_MS` and `PI_QUIET_SPINNER_FRAMES` override the preset's interval and frame list. A preset supplies defaults and an explicit override always wins, including with `default`. Empty or whitespace-only values count as unset. No file, `settings.json`, or CLI flag surface is added.
+2. Configuration is read from the process environment at activation: `PI_QUIET_SPINNER` selects a preset, `PI_QUIET_SPINNER_INTERVAL_MS` and `PI_QUIET_SPINNER_FRAMES` override the preset's interval and frame list. A preset supplies defaults and an explicit override always wins, including with `default`. An empty or whitespace-only value counts as unset for the preset and interval variables; a frame list that yields no frames is a configuration error rather than a silent no-op, because it would render an invisible indicator. No file, `settings.json`, or CLI flag surface is added.
 3. The interval is always applied as a floor: `max(loaderIntervalMs, configuredIntervalMs)`. A loader that is already slower than the configured value keeps its own interval.
 4. Style substitution mutates the loader's frame list after the original `setIndicator` has run; the package never calls `setIndicator` itself and never writes `renderIndicatorVerbatim`. Loaders that passed no explicit indicator therefore keep the theme-colored rendering path, and the frame override is applied without changing that selection.
 5. A missing or non-function patched method fails at activation with an error naming the missing method and the package, so the workaround cannot silently become a no-op. This is safe because a failed extension load is logged and the host continues.
@@ -95,7 +95,7 @@ Each acceptance is exercised by asserting on exports of the transpiled source co
 
 ## Scope
 
-Editable paths: the new `packages/pi-quiet-spinner` tree (`package.json`, `tsconfig.json`, `src/index.ts`, `test/_load-src.mjs`, `test/options.test.mjs`, `test/patch.test.mjs`, `test/package.test.mjs`, `README.md`, `CHANGELOG.md`, `LICENSE`), the root `README.md` package table, and one new `.changeset` entry. This Spec's active path is recorded for artifact freezing.
+Editable paths: the new `packages/pi-quiet-spinner` tree (`package.json`, `tsconfig.json`, `src/index.ts`, `test/_load-src.mjs`, `test/options.test.mjs`, `test/patch.test.mjs`, `test/package.test.mjs`, `README.md`, `CHANGELOG.md`, `LICENSE`), the root `README.md` package table, and one new `.changeset` entry. This Spec's active and archive paths are recorded for artifact freezing.
 
 ### Non-goals
 

@@ -1,0 +1,279 @@
+{
+  "contract": "assurance_kernel/task_record/v4",
+  "task_id": "pi-quiet-spinner",
+  "intent_snapshot": {
+    "contract": "assurance_kernel/task_intent/v1",
+    "task_id": "pi-quiet-spinner",
+    "goal": "Ship the existing pi-tui spinner CPU workaround as the standalone published workspace package `pi-quiet-spinner`, with one environment-driven preset knob that binds spinner style to refresh rate while defaulting to today's behavior.",
+    "acceptance": [
+      {
+        "id": "A1",
+        "assertion": "The package resolves `PI_QUIET_SPINNER` and its two override variables into the documented options: an unset or empty configuration resolves to the `quiet` preset (four frames, 1000 ms), `still` resolves to exactly one frame, `calm` to eight frames at 400 ms, and `default` to no patch at all; an explicit `PI_QUIET_SPINNER_INTERVAL_MS` or `PI_QUIET_SPINNER_FRAMES` overrides the preset value even under `default`; and an unknown preset, a non-positive or non-integer interval, or an empty frame list fails with the offending value named in the error message.",
+        "verification": "{\"contract\":\"assurance_kernel/verification_descriptor/v1\",\"runner_id\":\"bun\",\"runner_version\":\"1.4.2\",\"argv\":[\"run\",\"packages/pi-quiet-spinner/test/options.test.mjs\"],\"cwd\":\".\",\"timeout_ms\":30000,\"max_output_bytes\":32768}"
+      },
+      {
+        "id": "A2",
+        "assertion": "The package's prototype patch applies the resolved options to a `Loader`-shaped object: a loader whose interval is already slower than the configured floor keeps its own interval, a loader at the upstream default is raised to the floor, the frame override is applied to a loader that passed no explicit indicator while that loader's verbatim-rendering flag stays unchanged, installing the patch twice neither stacks wrappers nor changes behavior, and a prototype that does not expose the patched method fails at activation.",
+        "verification": "{\"contract\":\"assurance_kernel/verification_descriptor/v1\",\"runner_id\":\"bun\",\"runner_version\":\"1.4.2\",\"argv\":[\"run\",\"packages/pi-quiet-spinner/test/patch.test.mjs\"],\"cwd\":\".\",\"timeout_ms\":30000,\"max_output_bytes\":32768}"
+      },
+      {
+        "id": "A3",
+        "assertion": "The package manifest and documentation declare the published contract: name `pi-quiet-spinner`, the `pi.extensions` entry, the `check`, `test` and `pack:dry-run` scripts, the published `files` list, `publishConfig`, the Node engine floor, every preset and environment variable with its default, the process-wide effect of the patch, and the exit plan for the upstream workaround; a changeset and the root README package-table entry exist.",
+        "verification": "{\"contract\":\"assurance_kernel/verification_descriptor/v1\",\"runner_id\":\"bun\",\"runner_version\":\"1.4.2\",\"argv\":[\"run\",\"packages/pi-quiet-spinner/test/package.test.mjs\"],\"cwd\":\".\",\"timeout_ms\":30000,\"max_output_bytes\":32768}"
+      }
+    ],
+    "scope_hint": [
+      ".changeset/quiet-spinner-package.md",
+      "README.md",
+      "docs/specs/archive/pi-quiet-spinner.spec.md",
+      "docs/specs/pi-quiet-spinner.spec.md",
+      "package-lock.json",
+      "packages/pi-quiet-spinner/CHANGELOG.md",
+      "packages/pi-quiet-spinner/LICENSE",
+      "packages/pi-quiet-spinner/README.md",
+      "packages/pi-quiet-spinner/package.json",
+      "packages/pi-quiet-spinner/src/index.ts",
+      "packages/pi-quiet-spinner/test/_load-src.mjs",
+      "packages/pi-quiet-spinner/test/options.test.mjs",
+      "packages/pi-quiet-spinner/test/package.test.mjs",
+      "packages/pi-quiet-spinner/test/patch.test.mjs",
+      "packages/pi-quiet-spinner/tsconfig.json"
+    ],
+    "risk": "material",
+    "revision": 3,
+    "owner": "user"
+  },
+  "intent_ref": {
+    "path": "docs/plans/archive/pi-quiet-spinner.intent.json",
+    "content_hash": "sha256:01775b722f744c8f3e8d7f0ee076adaa3181341f8b5099162966f515f90da826"
+  },
+  "lifecycle": "done",
+  "artifact_state": "frozen",
+  "baseline": "sha256:8211241574125d0a8bde33ac59d2051b5e0a0632b17d51fad40195de830b7a76",
+  "git_base_head": "688de5801c453719eac96f97a5f2a8a367509971",
+  "attestations": [
+    {
+      "id": "approval-qa-8d467bab",
+      "kind": "qa",
+      "authority_role": "qa",
+      "task_revision": 3,
+      "intent_content_hash": "sha256:01775b722f744c8f3e8d7f0ee076adaa3181341f8b5099162966f515f90da826",
+      "diff_hash": "sha256:7b974f289f042d6987476d1e3d274fe9b140b75a5c10cede0142892493aeac7f",
+      "actor_id": "deterministic-qa",
+      "summary": "all 3 fixed verification descriptor(s) passed",
+      "acceptance_results": [
+        {
+          "acceptance_id": "A1",
+          "status": "passed",
+          "summary": "host-attested QA: all 3 fixed verification descriptor(s) passed"
+        },
+        {
+          "acceptance_id": "A2",
+          "status": "passed",
+          "summary": "host-attested QA: all 3 fixed verification descriptor(s) passed"
+        },
+        {
+          "acceptance_id": "A3",
+          "status": "passed",
+          "summary": "host-attested QA: all 3 fixed verification descriptor(s) passed"
+        }
+      ]
+    },
+    {
+      "id": "approval-qa-061ba00e",
+      "kind": "qa",
+      "authority_role": "qa",
+      "task_revision": 3,
+      "intent_content_hash": "sha256:01775b722f744c8f3e8d7f0ee076adaa3181341f8b5099162966f515f90da826",
+      "diff_hash": "sha256:d6b68c7970e250afe8927c2a05851dbc7271a937718f27520295a3e22b1a5768",
+      "actor_id": "deterministic-qa",
+      "summary": "all 3 fixed verification descriptor(s) passed",
+      "acceptance_results": [
+        {
+          "acceptance_id": "A1",
+          "status": "passed",
+          "summary": "host-attested QA: all 3 fixed verification descriptor(s) passed"
+        },
+        {
+          "acceptance_id": "A2",
+          "status": "passed",
+          "summary": "host-attested QA: all 3 fixed verification descriptor(s) passed"
+        },
+        {
+          "acceptance_id": "A3",
+          "status": "passed",
+          "summary": "host-attested QA: all 3 fixed verification descriptor(s) passed"
+        }
+      ]
+    },
+    {
+      "id": "approval-review-4e971ac3",
+      "kind": "review",
+      "authority_role": "reviewer",
+      "task_revision": 3,
+      "intent_content_hash": "sha256:01775b722f744c8f3e8d7f0ee076adaa3181341f8b5099162966f515f90da826",
+      "diff_hash": "sha256:d6b68c7970e250afe8927c2a05851dbc7271a937718f27520295a3e22b1a5768",
+      "actor_id": "parent-mediated-review",
+      "summary": "Verified manifest digest, immutable commit identity, single parent, tree and changed-path object IDs; no actionable correctness or security defects found against A1–A3 and their host-attested passing outcomes. Runtime integration remains limited to the explicitly documented Loader stub coverage.",
+      "acceptance_results": [],
+      "review_revision": {
+        "contract": "assurance_kernel/review_revision_identity/v1",
+        "base_head": "688de5801c453719eac96f97a5f2a8a367509971",
+        "review_commit": "ff699e865fd9bbfcd53a40082a2176ec5cbd082c",
+        "review_tree": "17e00a40c5e607ab94924850ae6de20e590f66fe",
+        "manifest_digest": "sha256:46a94892aaf3ff0a209aa0527303941a8e68b20c1e7faff7d0f5b248dd4ce0dd"
+      }
+    }
+  ],
+  "findings": [
+    {
+      "id": "review-b00c662bd9fc-1-review-1",
+      "kind": "blocking",
+      "status": "resolved",
+      "acceptance_id": "A1",
+      "source": "review",
+      "review_round": 1,
+      "summary": "packages/pi-quiet-spinner/src/index.ts:137–143 的 parseInterval 只验证十进制字符和正数，接受超过计时器上限的值，甚至接受转换后为 Infinity 的值。Node 会将溢出的 setInterval 延迟改为 1 ms，导致减速配置反而显著增加刷新频率。应校验 Number.isSafeInteger(value) 且 1 <= value <= 2147483647，错误中保留原值，并补充边界测试。",
+      "anchor": "sha256:60249e58215230569699614ce0f141feed0bcc0fa7e9fe6c9defa0177381d385",
+      "evidence": {
+        "trigger": "默认 quiet 预设下设置 PI_QUIET_SPINNER_INTERVAL_MS=\"2147483648\"，或设置为由 400 个数字 9 组成的字符串；parseInterval 均不会抛错，后者转换为 Infinity，配置随后传入多帧 Loader 的计时器。",
+        "caller_chain": [
+          "packages/pi-quiet-spinner/src/index.ts:default",
+          "packages/pi-quiet-spinner/src/index.ts:resolveOptions",
+          "packages/pi-quiet-spinner/src/index.ts:parseInterval",
+          "packages/pi-quiet-spinner/src/index.ts:installQuietSpinner",
+          "packages/pi-quiet-spinner/src/index.ts:proto.restartAnimation"
+        ],
+        "violated": {
+          "kind": "acceptance",
+          "ref": "A1"
+        }
+      },
+      "counterevidence": null
+    }
+  ],
+  "history": [
+    {
+      "id": "approve_breaking_intent_revision:pi-quiet-spinner:2026-09-16T03:38:02.257Z",
+      "at": "2026-09-16T03:38:02.257Z",
+      "type": "approve_breaking_intent_revision",
+      "from_state": "active:active",
+      "to_state": "active:active",
+      "reason": "intent_revision_2\naction_v2_sha256:b18443dc66d233b9da34b5cbc08c8829ef6ce3f04421e012f12486674cc80f2a",
+      "authority": {
+        "authority_kind": "user",
+        "actor_id": "literal-user",
+        "confirmation_ref": "pi-confirm-8dca19c56fa0c471",
+        "issued_at": "2026-09-16T03:38:02.397Z",
+        "expires_at": "2026-09-16T03:48:02.397Z"
+      }
+    },
+    {
+      "id": "approve_breaking_intent_revision:pi-quiet-spinner:2026-09-16T03:52:39.484Z",
+      "at": "2026-09-16T03:52:39.484Z",
+      "type": "approve_breaking_intent_revision",
+      "from_state": "active:active",
+      "to_state": "active:active",
+      "reason": "intent_revision_3\naction_v2_sha256:c2e31084ec5c96bb1f5f28752fd6e0f4fdca388f9bdedf7b6b0ab0efb44ab52c",
+      "authority": {
+        "authority_kind": "user",
+        "actor_id": "literal-user",
+        "confirmation_ref": "pi-confirm-ca87c851c2b2c56d",
+        "issued_at": "2026-09-16T03:52:40.598Z",
+        "expires_at": "2026-09-16T04:02:40.598Z"
+      }
+    },
+    {
+      "id": "freeze_artifacts:pi-quiet-spinner:2026-09-16T03:53:27.064Z",
+      "at": "2026-09-16T03:53:27.064Z",
+      "type": "freeze_artifacts",
+      "from_state": "active:active",
+      "to_state": "active:frozen",
+      "reason": "TaskIntent and Spec frozen at docs/plans/archive/pi-quiet-spinner.intent.json"
+    },
+    {
+      "id": "record_approval:pi-quiet-spinner:2026-09-16T03:54:22.200Z",
+      "at": "2026-09-16T03:54:22.200Z",
+      "type": "record_approval",
+      "from_state": "active:frozen",
+      "to_state": "active:frozen",
+      "reason": "approval-qa-8d467bab\naction_v2_sha256:10a10a1f542eaa5fdf0ebbd1bca1b65152d6790e6611e968746ca84dd2d96e67",
+      "authority": {
+        "authority_kind": "qa",
+        "actor_id": "deterministic-qa",
+        "confirmation_ref": "pi-confirm-9f3a0b75acfdd070",
+        "issued_at": "2026-09-16T03:54:22.201Z",
+        "expires_at": "2026-09-16T04:04:22.201Z"
+      }
+    },
+    {
+      "id": "request_rework:pi-quiet-spinner:2026-09-16T03:58:37.766Z",
+      "at": "2026-09-16T03:58:37.766Z",
+      "type": "request_rework",
+      "from_state": "active:frozen",
+      "to_state": "active:active",
+      "reason": "review_round_1\naction_v2_sha256:29fc7326874339c17a59f25ba3284b0e1205bee1d17a973fab5acdbd6a8a34f3",
+      "authority": {
+        "authority_kind": "review",
+        "actor_id": "parent-mediated-review",
+        "confirmation_ref": "pi-confirm-37bb506f4e36c69b",
+        "issued_at": "2026-09-16T03:58:37.767Z",
+        "expires_at": "2026-09-16T04:08:37.766Z"
+      }
+    },
+    {
+      "id": "freeze_artifacts:pi-quiet-spinner:2026-09-16T03:59:55.585Z",
+      "at": "2026-09-16T03:59:55.585Z",
+      "type": "freeze_artifacts",
+      "from_state": "active:active",
+      "to_state": "active:frozen",
+      "reason": "TaskIntent and Spec frozen at docs/plans/archive/pi-quiet-spinner.intent.json"
+    },
+    {
+      "id": "resolve_finding:pi-quiet-spinner:2026-09-16T04:00:11.599Z",
+      "at": "2026-09-16T04:00:11.599Z",
+      "type": "resolve_finding",
+      "from_state": "active:frozen",
+      "to_state": "active:frozen",
+      "reason": "review-b00c662bd9fc-1-review-1\naction_v2_sha256:963d1bab15913e0b7cf6e6bc3363f5c86fc3c88b5979cc263c8c2f05ef4dd5a9"
+    },
+    {
+      "id": "record_approval:pi-quiet-spinner:2026-09-16T04:00:38.594Z",
+      "at": "2026-09-16T04:00:38.594Z",
+      "type": "record_approval",
+      "from_state": "active:frozen",
+      "to_state": "active:frozen",
+      "reason": "approval-qa-061ba00e\naction_v2_sha256:518b2ab830921ddc21acd713c41a6c9379406a21b912c3c8a96cbe6a5cce8d47",
+      "authority": {
+        "authority_kind": "qa",
+        "actor_id": "deterministic-qa",
+        "confirmation_ref": "pi-confirm-d53399743681f327",
+        "issued_at": "2026-09-16T04:00:38.594Z",
+        "expires_at": "2026-09-16T04:10:38.594Z"
+      }
+    },
+    {
+      "id": "record_approval:pi-quiet-spinner:2026-09-16T04:03:23.501Z",
+      "at": "2026-09-16T04:03:23.501Z",
+      "type": "record_approval",
+      "from_state": "active:frozen",
+      "to_state": "active:frozen",
+      "reason": "approval-review-4e971ac3\naction_v2_sha256:46dbde95f5bae1f8b20349d287b08438a5bf4113ceaeb338895ef23775c9e2a5",
+      "authority": {
+        "authority_kind": "review",
+        "actor_id": "parent-mediated-review",
+        "confirmation_ref": "pi-confirm-3905c8e9e91650a6",
+        "issued_at": "2026-09-16T04:03:23.501Z",
+        "expires_at": "2026-09-16T04:13:23.501Z"
+      }
+    },
+    {
+      "id": "complete:pi-quiet-spinner:2026-09-16T04:03:26.387Z",
+      "at": "2026-09-16T04:03:26.387Z",
+      "type": "complete",
+      "from_state": "active:frozen",
+      "to_state": "done:frozen",
+      "reason": "action_v2_sha256:982ce215bd389a16bd3db6fe500d89039fbc1261dd71e2b7b3dba14d941f018b"
+    }
+  ]
+}
