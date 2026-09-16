@@ -1,6 +1,6 @@
 {
   "name": "pi-quiet-spinner",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Pi extension that floors pi-tui spinner frame intervals to cut the CPU cost of full-transcript redraws.",
   "type": "module",
   "license": "MIT",
