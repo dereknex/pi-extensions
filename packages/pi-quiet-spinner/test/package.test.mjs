@@ -58,9 +58,13 @@ const changesets = fs
 	.readdirSync(path.join(repoRoot, ".changeset"))
 	.filter((name) => name.endsWith(".md"))
 	.map((name) => fs.readFileSync(path.join(repoRoot, ".changeset", name), "utf8"));
+// Before the first release a pending changeset is the record; afterwards
+// `changeset version` consumes it and the CHANGELOG entry is the record.
+const changelog = fs.readFileSync(path.join(packageDir, "CHANGELOG.md"), "utf8");
+const released = manifest.version !== "0.0.0" && changelog.includes(`## ${manifest.version}`);
 assert.ok(
-	changesets.some((text) => text.includes('"pi-quiet-spinner"')),
-	"a changeset records the new package",
+	changesets.some((text) => text.includes('"pi-quiet-spinner"')) || released,
+	"a pending changeset or a released CHANGELOG entry records the package",
 );
 
 console.log("package.test.mjs: ok");
