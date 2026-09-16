@@ -4,4 +4,4 @@
 
 ### Patch Changes
 
-- Initial release: floors pi-tui spinner frame intervals through `PI_QUIET_SPINNER` presets.
+- Initial release: floors pi-tui spinner frame intervals through the `quiet-spinner` settings block.

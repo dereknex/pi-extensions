@@ -1,9 +1,10 @@
 // Shared loader for the acceptance scripts.
 //
-// Each test transpiles src/index.ts in memory with its pi-tui runtime import
-// replaced by a stub, so the package logic runs under plain Node (including CI's
-// Node 20) and under `bun run` (the managed QA runner) without importing the TUI
-// runtime, which is not loadable in that environment.
+// Each test transpiles src/index.ts in memory with its pi-tui and
+// pi-coding-agent runtime imports replaced by stubs, so the package logic runs
+// under plain Node (including CI's Node 20) and under `bun run` (the managed QA
+// runner) without importing the TUI runtime, which is not loadable in that
+// environment.
 //
 // The stub mirrors node_modules/@earendil-works/pi-tui/dist/components/loader.js:
 // same field defaults, same `setIndicator` -> `start` -> `restartAnimation` flow,
@@ -27,6 +28,8 @@ process.on("exit", () => {
 });
 
 const PI_TUI_IMPORT = /import\s*\{\s*Loader\s*\}\s*from\s*"@earendil-works\/pi-tui";/;
+const PI_CODING_AGENT_IMPORT =
+	/import\s*\{\s*CONFIG_DIR_NAME,\s*type\s+ExtensionAPI\s*\}\s*from\s*"@earendil-works\/pi-coding-agent";/;
 const UNSTUBBED_RUNTIME_IMPORT = /^import\s+(?!type\b)[^;\n]*from\s+"@earendil-works\//m;
 
 const LOADER_STUB = `const DEFAULT_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -73,6 +76,12 @@ export async function loadSource() {
 		);
 	}
 	source = source.replace(PI_TUI_IMPORT, LOADER_STUB);
+	if (!PI_CODING_AGENT_IMPORT.test(source)) {
+		throw new Error(
+			`_load-src: ${srcPath} no longer imports { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent"; update the stub`,
+		);
+	}
+	source = source.replace(PI_CODING_AGENT_IMPORT, 'const CONFIG_DIR_NAME = ".pi";');
 	if (UNSTUBBED_RUNTIME_IMPORT.test(source)) {
 		throw new Error(`_load-src: ${srcPath} has an unstubbed runtime import from @earendil-works/*`);
 	}

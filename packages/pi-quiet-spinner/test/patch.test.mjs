@@ -1,11 +1,9 @@
 // Acceptance A2: patch semantics.
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { assertThrowsNaming, loadSource } from "./_load-src.mjs";
-
-// The activation wiring reads the process environment; keep this run deterministic.
-delete process.env.PI_QUIET_SPINNER;
-delete process.env.PI_QUIET_SPINNER_INTERVAL_MS;
-delete process.env.PI_QUIET_SPINNER_FRAMES;
 
 const { module: source, Loader } = await loadSource();
 const { installQuietSpinner } = source;
@@ -114,16 +112,33 @@ assertThrowsNaming(
 
 // --- the extension entry installs the resolved options on the Loader prototype ---
 {
-	const before = new Loader();
-	assert.equal(before.intervalMs, 80, "the stub starts at the upstream interval");
+	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-quiet-spinner-"));
+	fs.mkdirSync(path.join(tmp, ".pi", "agent"), { recursive: true });
+	fs.writeFileSync(
+		path.join(tmp, ".pi", "agent", "settings.json"),
+		JSON.stringify({ "quiet-spinner": { preset: "calm" } }),
+	);
+	const previousHome = process.env.HOME;
+	const previousCwd = process.cwd();
+	process.env.HOME = tmp;
+	process.chdir(tmp);
+	try {
+		const before = new Loader();
+		assert.equal(before.intervalMs, 80, "the stub starts at the upstream interval");
 
-	source.default({});
+		source.default({});
 
-	const loader = new Loader();
-	loader.setIndicator();
-	assert.equal(loader.intervalMs, 1000, "the entry installs the default preset floor");
-	assert.equal(loader.frames.length, 4, "the entry installs the default preset frames");
-	loader.stop();
+		const loader = new Loader();
+		loader.setIndicator();
+		assert.equal(loader.intervalMs, 400, "the entry installs the configured preset floor");
+		assert.equal(loader.frames.length, 8, "the entry installs the configured preset frames");
+		loader.stop();
+	} finally {
+		process.chdir(previousCwd);
+		if (previousHome === undefined) delete process.env.HOME;
+		else process.env.HOME = previousHome;
+		fs.rmSync(tmp, { recursive: true, force: true });
+	}
 }
 
 console.log("patch.test.mjs: ok");

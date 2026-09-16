@@ -27,9 +27,12 @@ assert.ok(manifest.peerDependencies?.["@earendil-works/pi-coding-agent"]);
 
 // --- documentation -------------------------------------------------------------
 for (const fragment of [
-	"PI_QUIET_SPINNER",
-	"PI_QUIET_SPINNER_INTERVAL_MS",
-	"PI_QUIET_SPINNER_FRAMES",
+	"`quiet-spinner`",
+	"~/.pi/agent/settings.json",
+	".pi/settings.json",
+	"`preset`",
+	"`intervalMs`",
+	"`frames`",
 	"`still`",
 	"`quiet`",
 	"`calm`",
@@ -37,6 +40,10 @@ for (const fragment of [
 ]) {
 	assert.ok(readme.includes(fragment), `the README documents ${fragment}`);
 }
+assert.ok(
+	!readme.includes("PI_QUIET_SPINNER"),
+	"the README no longer documents environment variables",
+);
 assert.ok(readme.includes("every `Loader` in the process"), "the README states the process-wide effect");
 assert.ok(readme.includes("9549"), "the README records the upstream exit plan");
 assert.ok(readme.includes("EXIT PLAN"), "the exit plan is a named section");
