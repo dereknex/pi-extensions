@@ -26,14 +26,14 @@ Or add it to `~/.pi/agent/settings.json`:
 
 Style and refresh rate are one knob: a slower spinner needs a shorter animation cycle to still read as motion, so each preset pairs a frame list with an interval.
 
-| `preset` | Frames | Interval | Redraws | Use when |
-| --- | --- | --- | --- | --- |
-| `still` | 1 | — | 0/s | You want the maximum saving; the indicator stops moving and only the message text updates. |
-| `quiet` | 4 | 1000 ms | 1/s | Default. Keeps a visible tick at a fraction of the redraws. |
-| `calm` | 8 | 400 ms | 2.5/s | A middle ground for smaller sessions. |
-| `default` | upstream | 80 ms | 12.5/s | Escape hatch: installs no patch at all. |
+| `preset` | Frames | Characters | Interval | Redraws | Use when |
+| --- | --- | --- | --- | --- | --- |
+| `still` | 1 | `⠿` | — | 0/s | You want the maximum saving; the indicator stops moving and only the message text updates. |
+| `quiet` | 4 | `⠋ ⠙ ⠹ ⠸` | 1000 ms | 1/s | Default. Keeps a visible tick at a fraction of the redraws. |
+| `calm` | 8 | `⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧` | 400 ms | 2.5/s | A middle ground for smaller sessions. |
+| `default` | upstream (10) | `⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏` | 80 ms | 12.5/s | Escape hatch: installs no patch at all. |
 
-The frames used by `still`, `quiet` and `calm` are prefixes of the braille cycle pi already uses, so no new glyph vocabulary appears.
+The frames used by `still`, `quiet` and `calm` are prefixes of the braille cycle pi already uses (`⠿` for `still`), so no new glyph vocabulary appears.
 
 ## Configuration
 
@@ -78,6 +78,44 @@ A preset supplies defaults and an explicit override always wins, including under
 The first configures a slower, motionless indicator; the second keeps pi's own frames but only 4 redraws per second.
 
 Frame content is the whole point of the `frames` key, so a value that yields no frames at all — an empty list or an entry that is blank — is rejected instead of silently ignored, because it would render an invisible indicator.
+
+### Custom frame examples
+
+You can customize `"frames"` with any list of non-empty strings. Common examples:
+
+```json
+// Classic line
+{
+  "quiet-spinner": {
+    "frames": ["-", "\\", "|", "/"],
+    "intervalMs": 250
+  }
+}
+
+// Blocks
+{
+  "quiet-spinner": {
+    "frames": ["▖", "▘", "▝", "▗"],
+    "intervalMs": 200
+  }
+}
+
+// Pulse
+{
+  "quiet-spinner": {
+    "frames": [" ", "▃", "▄", "▅", "▆", "▇", "█", "▇", "▆", "▅", "▄", "▃"],
+    "intervalMs": 150
+  }
+}
+
+// Simple dots
+{
+  "quiet-spinner": {
+    "frames": [".", "..", "...", ".."],
+    "intervalMs": 500
+  }
+}
+```
 
 An unknown key, an unknown preset, a non-integer interval, or an unreadable or unparsable settings file fails at activation with the offending value and the accepted values in the message. Pi logs the extension load error and carries on, so a broken configuration disables this package rather than the session.
 
