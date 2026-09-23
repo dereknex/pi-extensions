@@ -180,7 +180,7 @@ if (process.env.PI_API_SELECTION_CHILD === "1") {
 			new URL("../src/index.ts", import.meta.url),
 			"utf8",
 		);
-		const output = ts.transpileModule(source, {
+		const output = ts.transpileModule(`${source}\nexport { buildRegisteredModels };`, {
 			compilerOptions: {
 				module: ts.ModuleKind.ES2022,
 				target: ts.ScriptTarget.ES2022,
@@ -228,8 +228,35 @@ if (process.env.PI_API_SELECTION_CHILD === "1") {
 			usageSwitch: true,
 		});
 		assert.equal(usageSwitch.stdout, "usage-cleared-on-model-switch");
-		const { renderProgressBar } = await import(
+		const { renderProgressBar, buildRegisteredModels } = await import(
 			pathToFileURL(compiledExtension).href
+		);
+		const reasoningCases = [
+			{ id: "gpt-6-astra", expected: true },
+			{ id: "gpt-6-luna", expected: true },
+			{ id: "gpt-6-sol", expected: true },
+			{ id: "gpt-5.5", expected: true },
+			{ id: "gpt-5.6-luna", expected: true },
+			{ id: "unknown-model", expected: false },
+			{ id: "remote-model", remote: true, expected: true },
+			{ id: "gpt-5.6-luna", remote: false, expected: false },
+			{ id: "gpt-6-astra", remote: true, local: false, expected: false },
+			{ id: "remote-model", remote: false, local: true, expected: true },
+			{ id: "unknown-model", remote: "true", expected: false },
+			{ id: "gpt-6-astra", remote: "false", expected: true },
+		];
+		for (const { id, remote, local, expected } of reasoningCases) {
+			const [model] = buildRegisteredModels(
+				{ models: local === undefined ? [] : [{ id, reasoning: local }] },
+				[{ id, reasoning: remote }],
+			);
+			const label = JSON.stringify({ id, remote, local });
+			assert.equal(model.reasoning, expected, label);
+			assert.equal(Boolean(model.thinkingLevelMap), expected, label);
+		}
+		assert.equal(
+			buildRegisteredModels({ models: [{ id: "gpt-6-astra" }] })[0].reasoning,
+			true,
 		);
 		assert.equal(renderProgressBar(0, 5), "[⡀⡀⡀⡀⡀]");
 		assert.equal(renderProgressBar(25, 5), "[⣿⣀⡀⡀⡀]");
@@ -240,7 +267,7 @@ if (process.env.PI_API_SELECTION_CHILD === "1") {
 		assert.equal(renderProgressBar(150, 5), "[⣿⣿⣿⣿⣿]");
 		assert.equal(renderProgressBar(-10, 5), "[⡀⡀⡀⡀⡀]");
 
-		console.log("API adapter selection, model probing, and usage reset passed");
+		console.log("API adapter selection, model probing, reasoning metadata, and usage reset passed");
 	} finally {
 		fs.rmSync(buildDir, { recursive: true, force: true });
 	}

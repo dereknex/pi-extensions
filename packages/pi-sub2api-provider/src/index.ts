@@ -435,12 +435,13 @@ function buildRegisteredModels(
 		const remoteMaxTokens = pickRemoteMaxTokens(m);
 		const isReasoning =
 			configured?.reasoning ??
+			(typeof m.reasoning === "boolean" ? m.reasoning : undefined) ??
 			defaultMetadata.reasoning ??
 			(normalizedId.includes("o1") ||
 				normalizedId.includes("o3") ||
 				normalizedId.includes("reasoning") ||
 				normalizedId.includes("gpt5") ||
-				normalizedId.includes("gpt55"));
+				normalizedId.includes("gpt6"));
 		return {
 			...configured,
 			id,
