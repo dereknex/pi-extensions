@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.2
+
+### Patch Changes
+
+- ebcac6c: Recognize GPT-6 models as reasoning-capable when upstream metadata is absent. Honor boolean reasoning metadata from the models endpoint while keeping explicit local configuration highest priority.
+
 ## 0.6.1
 
 ### Patch Changes
