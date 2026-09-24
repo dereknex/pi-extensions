@@ -116,6 +116,28 @@ The provider defaults to `openai-completions`. To opt into Pi's generic OpenAI R
 
 `openai-responses` uses the HTTP/SSE Responses API in this integration. It does not enable WebSocket transport or `websocket-cached`; a Sub2API WebSocket adapter is not included.
 
+## Settings
+
+Configure the status bar usage display style in global `~/.pi/agent/settings.json` or project `.pi/settings.json`:
+
+```json
+{
+  "sub2api": {
+    "statusBarUsage": "progress"
+  }
+}
+```
+
+Supported options for `statusBarUsage` (or `usageDisplay`):
+
+| Value | Description | Example |
+|---|---|---|
+| `"progress"` / `"bar"` | Progress bar (default) | `● my-sub2api d [⣿⣀⡀⡀⡀] · w [⣤⡀⡀⡀⡀]` |
+| `"numeric"` / `"percent"` | Percentage numbers | `● my-sub2api d 25% · w 50%` |
+| `"none"` / `false` | Hide usage from status bar | *(cleared)* |
+
+You can also override this with the `SUB2API_STATUS_BAR_USAGE` environment variable.
+
 ## Development
 
 From the monorepo root (installs all packages and runs checks for all of them):
@@ -159,9 +181,14 @@ Inside pi:
 
 The status bar will show something like:
 
-```text
-● my-sub2api d [⣿⣀⡀⡀⡀] · w [⣤⡀⡀⡀⡀]
-```
+- Progress bar (default):
+  ```text
+  ● my-sub2api d [⣿⣀⡀⡀⡀] · w [⣤⡀⡀⡀⡀]
+  ```
+- Numeric mode (`"statusBarUsage": "numeric"`):
+  ```text
+  ● my-sub2api d 25% · w 50%
+  ```
 
 ## License
 

@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ThemeColor } from "@earendil-works/pi-coding-agent";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -524,6 +524,120 @@ function shortWindowLabel(window: string): string {
 
 const BRAILLE_STEPS = ["⡀", "⣀", "⣤", "⣶", "⣿"] as const;
 
+export type StatusBarUsageStyle = "progress" | "numeric" | "none";
+
+export interface Sub2ApiSettings {
+	statusBarUsage?: string | boolean;
+	usageDisplay?: string | boolean;
+	usageStyle?: string | boolean;
+	showStatusBarUsage?: boolean;
+	showUsage?: boolean;
+}
+
+export function normalizeUsageStyle(val: unknown): StatusBarUsageStyle {
+	if (val === false) return "none";
+	if (typeof val === "string") {
+		const s = val.trim().toLowerCase();
+		if (s === "none" || s === "off" || s === "hidden" || s === "false") {
+			return "none";
+		}
+		if (
+			s === "numeric" ||
+			s === "number" ||
+			s === "numbers" ||
+			s === "percent" ||
+			s === "percentage"
+		) {
+			return "numeric";
+		}
+		if (
+			s === "progress" ||
+			s === "bar" ||
+			s === "progress-bar" ||
+			s === "progressbar"
+		) {
+			return "progress";
+		}
+	}
+	return "progress";
+}
+
+function readJsonConfigFile(filePath: string): Record<string, unknown> {
+	try {
+		if (!fs.existsSync(filePath)) return {};
+		const raw = fs.readFileSync(filePath, "utf-8");
+		const parsed = JSON.parse(raw);
+		return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+			? (parsed as Record<string, unknown>)
+			: {};
+	} catch {
+		return {};
+	}
+}
+
+export function readSub2ApiSettings(cwd?: string): Sub2ApiSettings {
+	const home = process.env.HOME || process.env.USERPROFILE || "";
+	const globalPath = path.join(home, ".pi", "agent", "settings.json");
+	const globalConfig = readJsonConfigFile(globalPath);
+
+	let projectConfig: Record<string, unknown> = {};
+	if (cwd) {
+		const projectPath = path.join(cwd, ".pi", "settings.json");
+		projectConfig = readJsonConfigFile(projectPath);
+	}
+
+	const extract = (cfg: Record<string, unknown>): Sub2ApiSettings => {
+		const sub =
+			cfg["sub2api"] ??
+			cfg["sub2api-provider"] ??
+			cfg["sub2api-quota"];
+		if (sub && typeof sub === "object" && !Array.isArray(sub)) {
+			return sub as Sub2ApiSettings;
+		}
+		return {};
+	};
+
+	return {
+		...extract(globalConfig),
+		...extract(projectConfig),
+	};
+}
+
+export function resolveUsageStyle(cwd?: string): StatusBarUsageStyle {
+	const envVal =
+		process.env.SUB2API_STATUS_BAR_USAGE || process.env.SUB2API_USAGE_STYLE;
+	if (envVal) {
+		return normalizeUsageStyle(envVal);
+	}
+
+	const settings = readSub2ApiSettings(cwd);
+	const raw =
+		settings.statusBarUsage ??
+		settings.usageDisplay ??
+		settings.usageStyle;
+
+	if (raw !== undefined) {
+		return normalizeUsageStyle(raw);
+	}
+
+	if (settings.showStatusBarUsage === false || settings.showUsage === false) {
+		return "none";
+	}
+
+	return "progress";
+}
+
+export function formatUsageIndicator(
+	percent: number,
+	style: "progress" | "numeric" = "progress",
+): string {
+	if (style === "numeric") {
+		const clamped = Math.max(0, percent);
+		return `${Math.round(clamped)}%`;
+	}
+	return renderProgressBar(percent);
+}
+
 export function renderProgressBar(percent: number, width = 5): string {
 	const clamped = Math.max(0, Math.min(100, percent));
 	const levelsPerCell = BRAILLE_STEPS.length - 1;
@@ -547,9 +661,12 @@ export function renderProgressBar(percent: number, width = 5): string {
 	return `[${bar}]`;
 }
 
-function formatUsagePercent(rl: RateLimit): string {
+export function formatUsagePercent(
+	rl: RateLimit,
+	style: "progress" | "numeric" = "progress",
+): string {
 	const percent = rl.limit > 0 ? Math.round((rl.used / rl.limit) * 100) : 0;
-	return `${shortWindowLabel(rl.window)} ${renderProgressBar(percent)}`;
+	return `${shortWindowLabel(rl.window)} ${formatUsageIndicator(percent, style)}`;
 }
 
 function pickQuotaWindows(rateLimits: RateLimit[]): RateLimit[] {
@@ -816,20 +933,24 @@ async function updateQuota(
 	}
 }
 
-function formatStatusText(providerId: string, info: QuotaInfo): string {
+export function formatStatusText(
+	providerId: string,
+	info: QuotaInfo,
+	style: "progress" | "numeric" = "progress",
+): string {
 	// 优先级与 CodexBar 一致：subscription > quota > rate_limits > balance/todayCost
 	// CodexBar sub2api.js: if (subscription) primary=daily, secondary=weekly, tertiary=monthly
 	//                     else if (quota) primary=quota
-	// statusbar 空间紧张，展示进度条与百分比；金额详情进 /quota
+	// statusbar 空间紧张，展示进度条或数字百分比；金额详情进 /quota
 	if (info.subscription) {
 		const parts: string[] = [];
 		const sub = info.subscription;
 		const dailyPct = subscriptionPercent(sub.dailyUsage, sub.dailyLimit);
 		const weeklyPct = subscriptionPercent(sub.weeklyUsage, sub.weeklyLimit);
 		const monthlyPct = subscriptionPercent(sub.monthlyUsage, sub.monthlyLimit);
-		if (dailyPct !== null) parts.push(`d ${renderProgressBar(dailyPct)}`);
-		if (weeklyPct !== null) parts.push(`w ${renderProgressBar(weeklyPct)}`);
-		if (monthlyPct !== null) parts.push(`m ${renderProgressBar(monthlyPct)}`);
+		if (dailyPct !== null) parts.push(`d ${formatUsageIndicator(dailyPct, style)}`);
+		if (weeklyPct !== null) parts.push(`w ${formatUsageIndicator(weeklyPct, style)}`);
+		if (monthlyPct !== null) parts.push(`m ${formatUsageIndicator(monthlyPct, style)}`);
 		if (parts.length) return `● ${providerId} ${parts.join(" · ")}`;
 		// subscription 无 limit 时回落到 rate_limits
 	}
@@ -839,16 +960,18 @@ function formatStatusText(providerId: string, info: QuotaInfo): string {
 		// 若同时有 rate_limits，附加一个最满的 window 以保留原有 5h/daily 感知
 		const windows = pickQuotaWindows(info.rateLimits).filter((rl) => rl.limit > 0);
 		if (windows.length) {
-			const windowPct = windows.map(formatUsagePercent).join(" · ");
-			return `● ${providerId} quota ${renderProgressBar(pct)} · ${windowPct}`;
+			const windowPct = windows
+				.map((rl) => formatUsagePercent(rl, style))
+				.join(" · ");
+			return `● ${providerId} quota ${formatUsageIndicator(pct, style)} · ${windowPct}`;
 		}
-		return `● ${providerId} quota ${renderProgressBar(pct)}`;
+		return `● ${providerId} quota ${formatUsageIndicator(pct, style)}`;
 	}
 	const windows = pickQuotaWindows(info.rateLimits).filter(
 		(rl) => rl.limit > 0,
 	);
 	if (windows.length) {
-		return `● ${providerId} ${windows.map(formatUsagePercent).join(" · ")}`;
+		return `● ${providerId} ${windows.map((rl) => formatUsagePercent(rl, style)).join(" · ")}`;
 	}
 	if (info.balance !== null) {
 		return `● ${providerId} ${formatMoneyWithUnit(info.balance, info.unit)}`;
@@ -1164,25 +1287,34 @@ export default async function (pi: ExtensionAPI) {
 		});
 	}
 
+	function updateStatusBar(
+		ctx: ExtensionContext,
+		providerId: string,
+	): void {
+		const style = resolveUsageStyle(ctx.cwd);
+		if (style === "none") {
+			ctx.ui.setStatus("sub2api-quota", undefined);
+			return;
+		}
+		const info = quotaProviders.get(providerId);
+		if (!info) return;
+		ctx.ui.setStatus(
+			"sub2api-quota",
+			ctx.ui.theme.fg("accent", formatStatusText(providerId, info, style)),
+		);
+	}
+
 	pi.on("session_start", (_event, ctx) => {
 		const model = ctx.model;
 		if (!model || !lazyProviders.has(model.provider)) return;
 
 		const info = quotaProviders.get(model.provider);
 		if (info) {
-			ctx.ui.setStatus(
-				"sub2api-quota",
-				ctx.ui.theme.fg("accent", formatStatusText(model.provider, info)),
-			);
+			updateStatusBar(ctx, model.provider);
 		}
 		refreshProviderInBackground(model.provider, () => {
 			if (ctx.model?.provider !== model.provider) return;
-			const fresh = quotaProviders.get(model.provider);
-			if (!fresh) return;
-			ctx.ui.setStatus(
-				"sub2api-quota",
-				ctx.ui.theme.fg("accent", formatStatusText(model.provider, fresh)),
-			);
+			updateStatusBar(ctx, model.provider);
 		});
 	});
 
@@ -1195,12 +1327,7 @@ export default async function (pi: ExtensionAPI) {
 
 		refreshProviderInBackground(providerId, () => {
 			if (ctx.model?.provider !== providerId) return;
-			const fresh = quotaProviders.get(providerId);
-			if (!fresh) return;
-			ctx.ui.setStatus(
-				"sub2api-quota",
-				ctx.ui.theme.fg("accent", formatStatusText(providerId, fresh)),
-			);
+			updateStatusBar(ctx, providerId);
 		});
 	});
 
@@ -1215,15 +1342,7 @@ export default async function (pi: ExtensionAPI) {
 				return updateQuota(model.provider, info.baseUrl, info.apiKey).then(
 					() => {
 						if (ctx.model?.provider !== model.provider) return;
-						const fresh = quotaProviders.get(model.provider);
-						if (!fresh) return;
-						ctx.ui.setStatus(
-							"sub2api-quota",
-							ctx.ui.theme.fg(
-								"accent",
-								formatStatusText(model.provider, fresh),
-							),
-						);
+						updateStatusBar(ctx, model.provider);
 					},
 				);
 			})
@@ -1376,7 +1495,9 @@ export default async function (pi: ExtensionAPI) {
 			}
 
 			// Notify: compact status-aligned string
-			const statusText = formatStatusText(providerId, fresh);
+			const style = resolveUsageStyle(ctx.cwd);
+			const toastStyle = style === "none" ? "progress" : style;
+			const statusText = formatStatusText(providerId, fresh, toastStyle);
 			// 去掉前缀 ● 后的纯指标用于 toast，避免重复图标
 			const toastText = statusText.replace(/^●\s*\S+\s*/, "");
 			if (fresh.subscription || fresh.quota || fresh.rateLimits.length) {

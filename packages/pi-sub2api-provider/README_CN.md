@@ -98,6 +98,28 @@ cp /Users/derek/workspaces/pi-extensions/packages/pi-sub2api-provider/src/index.
 
 > 安全说明：本仓库不保存、不复制任何 API key 或 auth 文件。
 
+## 设置选项
+
+可在全局 `~/.pi/agent/settings.json` 或项目 `.pi/settings.json` 中配置状态栏用量显示样式：
+
+```json
+{
+  "sub2api": {
+    "statusBarUsage": "progress"
+  }
+}
+```
+
+`statusBarUsage`（或 `usageDisplay`）支持的选项：
+
+| 取值 | 说明 | 示例 |
+|---|---|---|
+| `"progress"` / `"bar"` | 进度条（默认） | `● my-sub2api d [⣿⣀⡀⡀⡀] · w [⣤⡀⡀⡀⡀]` |
+| `"numeric"` / `"percent"` | 数字百分比 | `● my-sub2api d 25% · w 50%` |
+| `"none"` / `false` | 状态栏隐藏用量 | *(不显示状态)* |
+
+也可以通过环境变量 `SUB2API_STATUS_BAR_USAGE` 快速覆盖。
+
 ## 开发检查
 
 在 monorepo 根目录（安装全部包并检查全部包）：
@@ -141,9 +163,14 @@ npm run changeset
 
 状态栏会显示类似：
 
-```text
-● my-sub2api d [⣿⣀⡀⡀⡀] · w [⣤⡀⡀⡀⡀]
-```
+- 进度条模式（默认）：
+  ```text
+  ● my-sub2api d [⣿⣀⡀⡀⡀] · w [⣤⡀⡀⡀⡀]
+  ```
+- 数字模式（`"statusBarUsage": "numeric"`）：
+  ```text
+  ● my-sub2api d 25% · w 50%
+  ```
 
 ## License
 

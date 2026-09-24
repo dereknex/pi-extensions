@@ -53,6 +53,17 @@ async function runChild() {
 		while (!statuses.at(-1)?.includes("test") && Date.now() < deadline) {
 			await new Promise((resolve) => setTimeout(resolve, 10));
 		}
+		if (process.env.PI_TEST_USAGE_STYLE === "numeric") {
+			assert.match(statuses.at(-1) ?? "", /test/);
+			assert.match(statuses.at(-1) ?? "", /d 25%/);
+			console.log("usage-numeric-style-passed");
+			return;
+		}
+		if (process.env.PI_TEST_USAGE_STYLE === "none") {
+			assert.equal(statuses.at(-1), undefined);
+			console.log("usage-none-style-passed");
+			return;
+		}
 		assert.match(statuses.at(-1) ?? "", /test/);
 		assert.match(statuses.at(-1) ?? "", /\[[⡀⣀⣤⣶⣿]{5}\]/);
 
@@ -101,6 +112,8 @@ function runScenario(
 		remoteModelsUnavailable = false,
 		auth = { test: { type: "api-key", key: "test-key" } },
 		modelsCache,
+		settings,
+		testUsageStyle,
 		liveLogout = false,
 		usageSwitch = false,
 	} = {},
@@ -129,6 +142,12 @@ function runScenario(
 		}),
 	);
 	fs.writeFileSync(path.join(agentDir, "auth.json"), JSON.stringify(auth));
+	if (settings !== undefined) {
+		fs.writeFileSync(
+			path.join(agentDir, "settings.json"),
+			JSON.stringify(settings, null, "\t"),
+		);
+	}
 	if (modelsCache !== undefined) {
 		fs.writeFileSync(
 			path.join(agentDir, "models-cache.json"),
@@ -151,6 +170,7 @@ function runScenario(
 				PI_REMOTE_MODELS_UNAVAILABLE: remoteModelsUnavailable ? "1" : "0",
 				...(liveLogout ? { PI_LIVE_LOGOUT_CHILD: "1" } : {}),
 				...(usageSwitch ? { PI_USAGE_SWITCH_CHILD: "1" } : {}),
+				...(testUsageStyle ? { PI_TEST_USAGE_STYLE: testUsageStyle } : {}),
 			},
 			encoding: "utf8",
 		});
@@ -228,9 +248,36 @@ if (process.env.PI_API_SELECTION_CHILD === "1") {
 			usageSwitch: true,
 		});
 		assert.equal(usageSwitch.stdout, "usage-cleared-on-model-switch");
-		const { renderProgressBar, buildRegisteredModels } = await import(
-			pathToFileURL(compiledExtension).href
-		);
+
+		const usageNumeric = runScenario(compiledExtension, {
+			auth: {
+				test: { type: "api-key", key: "test-key" },
+				other: { type: "api-key", key: "other-key" },
+			},
+			usageSwitch: true,
+			settings: { sub2api: { statusBarUsage: "numeric" } },
+			testUsageStyle: "numeric",
+		});
+		assert.equal(usageNumeric.stdout, "usage-numeric-style-passed");
+
+		const usageNone = runScenario(compiledExtension, {
+			auth: {
+				test: { type: "api-key", key: "test-key" },
+				other: { type: "api-key", key: "other-key" },
+			},
+			usageSwitch: true,
+			settings: { sub2api: { statusBarUsage: "none" } },
+			testUsageStyle: "none",
+		});
+		assert.equal(usageNone.stdout, "usage-none-style-passed");
+
+		const {
+			renderProgressBar,
+			buildRegisteredModels,
+			formatStatusText,
+			normalizeUsageStyle,
+			resolveUsageStyle,
+		} = await import(pathToFileURL(compiledExtension).href);
 		const reasoningCases = [
 			{ id: "gpt-6-astra", expected: true },
 			{ id: "gpt-6-luna", expected: true },
@@ -266,6 +313,102 @@ if (process.env.PI_API_SELECTION_CHILD === "1") {
 		assert.equal(renderProgressBar(25, 10), "[⣿⣿⣤⡀⡀⡀⡀⡀⡀⡀]");
 		assert.equal(renderProgressBar(150, 5), "[⣿⣿⣿⣿⣿]");
 		assert.equal(renderProgressBar(-10, 5), "[⡀⡀⡀⡀⡀]");
+
+		// normalizeUsageStyle unit checks
+		assert.equal(normalizeUsageStyle("numeric"), "numeric");
+		assert.equal(normalizeUsageStyle("number"), "numeric");
+		assert.equal(normalizeUsageStyle("percent"), "numeric");
+		assert.equal(normalizeUsageStyle("progress"), "progress");
+		assert.equal(normalizeUsageStyle("bar"), "progress");
+		assert.equal(normalizeUsageStyle("progress-bar"), "progress");
+		assert.equal(normalizeUsageStyle("none"), "none");
+		assert.equal(normalizeUsageStyle("off"), "none");
+		assert.equal(normalizeUsageStyle(false), "none");
+		assert.equal(normalizeUsageStyle(undefined), "progress");
+		assert.equal(normalizeUsageStyle("unknown"), "progress");
+
+		// formatStatusText unit checks: subscription
+		const subInfo = {
+			subscription: {
+				dailyUsage: 25,
+				dailyLimit: 100,
+				weeklyUsage: 50,
+				weeklyLimit: 100,
+				monthlyUsage: 0,
+				monthlyLimit: null,
+			},
+			quota: null,
+			rateLimits: [],
+			balance: null,
+			todayCost: 0,
+			unit: "USD",
+		};
+		assert.equal(
+			formatStatusText("test", subInfo, "progress"),
+			"● test d [⣿⣀⡀⡀⡀] · w [⣿⣿⣤⡀⡀]",
+		);
+		assert.equal(
+			formatStatusText("test", subInfo, "numeric"),
+			"● test d 25% · w 50%",
+		);
+
+		// formatStatusText unit checks: quota
+		const quotaInfo = {
+			subscription: null,
+			quota: { used: 30, limit: 100 },
+			rateLimits: [
+				{ window: "5h", used: 10, limit: 100, remaining: 90 },
+			],
+			balance: null,
+			todayCost: 0,
+			unit: "USD",
+		};
+		assert.equal(
+			formatStatusText("test", quotaInfo, "progress"),
+			"● test quota [⣿⣤⡀⡀⡀] · 5h [⣤⡀⡀⡀⡀]",
+		);
+		assert.equal(
+			formatStatusText("test", quotaInfo, "numeric"),
+			"● test quota 30% · 5h 10%",
+		);
+
+		// formatStatusText unit checks: rateLimits only
+		const rlInfo = {
+			subscription: null,
+			quota: null,
+			rateLimits: [
+				{ window: "daily", used: 75, limit: 100, remaining: 25 },
+			],
+			balance: null,
+			todayCost: 0,
+			unit: "USD",
+		};
+		assert.equal(
+			formatStatusText("test", rlInfo, "progress"),
+			"● test d [⣿⣿⣿⣶⡀]",
+		);
+		assert.equal(
+			formatStatusText("test", rlInfo, "numeric"),
+			"● test d 75%",
+		);
+
+		// formatStatusText unit checks: balance & todayCost (no percent)
+		const balInfo = {
+			subscription: null,
+			quota: null,
+			rateLimits: [],
+			balance: 12.5,
+			todayCost: 1.2,
+			unit: "USD",
+		};
+		assert.equal(
+			formatStatusText("test", balInfo, "progress"),
+			"● test $12.50",
+		);
+		assert.equal(
+			formatStatusText("test", balInfo, "numeric"),
+			"● test $12.50",
+		);
 
 		console.log("API adapter selection, model probing, reasoning metadata, and usage reset passed");
 	} finally {
