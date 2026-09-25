@@ -144,6 +144,10 @@ interface ProviderModelConfig {
 	contextWindow?: number;
 	maxTokens?: number;
 	thinkingLevelMap?: ThinkingLevelMap;
+	/** Per-model API adapter override (defaults to the provider-level `api`). */
+	api?: string;
+	/** Per-model endpoint override; respected verbatim when present. */
+	baseUrl?: string;
 }
 
 /**
@@ -419,8 +423,41 @@ function getModelsBase(baseUrl: string): string {
 		: `${baseUrl.replace(/\/+$/, "")}/v1`;
 }
 
+/**
+ * Pi API adapters whose client library appends its own `/v1` segment to the base URL.
+ *
+ * - OpenAI adapters address `{baseUrl}/chat/completions` and `{baseUrl}/responses`, so the
+ *   registered base URL must end with `/v1`.
+ * - The `anthropic-messages` adapter hands `model.baseUrl` to the Anthropic SDK, which
+ *   builds `{baseUrl}/v1/messages` itself (Pi's built-in Anthropic models register
+ *   `https://api.anthropic.com` with no `/v1`), so those base URLs must NOT carry a
+ *   trailing `/v1` — otherwise the request lands on `/v1/v1/messages` and the upstream
+ *   router answers 404.
+ */
+const APIS_WITH_BUILT_IN_V1_PREFIX: ReadonlySet<string> = new Set([
+	"anthropic-messages",
+]);
+
+/**
+ * Resolve the base URL a model should be registered with for a given Pi API adapter.
+ *
+ * OpenAI adapters keep the historical `getModelsBase()` normalization (append `/v1`).
+ * Anthropic Messages strips a trailing `/v1` so the SDK does not double the segment.
+ * A base URL that already matches the adapter's expectation is returned unchanged.
+ */
+export function resolveApiBaseUrl(baseUrl: string, api?: string): string {
+	const trimmed = baseUrl.replace(/\/+$/, "");
+	if (!api || !APIS_WITH_BUILT_IN_V1_PREFIX.has(api)) {
+		return getModelsBase(trimmed);
+	}
+	return trimmed.endsWith("/v1")
+		? trimmed.slice(0, -"/v1".length)
+		: trimmed;
+}
+
 function buildRegisteredModels(
 	providerVal: ProviderConfig,
+	providerApi: string,
 	fetchedModels?: any[],
 ): any[] {
 	const configuredModels = new Map(
@@ -442,8 +479,16 @@ function buildRegisteredModels(
 				normalizedId.includes("reasoning") ||
 				normalizedId.includes("gpt5") ||
 				normalizedId.includes("gpt6"));
+		// A per-model `api`/`baseUrl` wins; otherwise fall back to the provider-level api
+		// and the base URL derived from the configured (raw) models.json baseUrl.
+		const modelApi = configured?.api ?? m.api ?? providerApi;
 		return {
 			...configured,
+			baseUrl:
+				configured?.baseUrl ??
+				(providerVal.baseUrl
+					? resolveApiBaseUrl(providerVal.baseUrl, modelApi)
+					: undefined),
 			id,
 			name: m.display_name || m.name || configured?.name || id,
 			reasoning: isReasoning,
@@ -474,17 +519,18 @@ function buildRegisteredModels(
 function registerProviderModels(
 	pi: ExtensionAPI,
 	providerId: string,
-	state: Pick<LazyProviderState, "modelsBase" | "apiKey" | "providerVal">,
+	state: Pick<LazyProviderState, "baseUrl" | "apiKey" | "providerVal">,
 	fetchedModels?: any[],
 ): boolean {
-	const models = buildRegisteredModels(state.providerVal, fetchedModels);
+	const api = state.providerVal.api ?? "openai-completions";
+	const models = buildRegisteredModels(state.providerVal, api, fetchedModels);
 	if (!models.length) return false;
 	pi.registerProvider(providerId, {
 		name: providerId,
-		baseUrl: state.modelsBase,
+		baseUrl: resolveApiBaseUrl(state.baseUrl, api),
 		apiKey: state.apiKey,
 		authHeader: true,
-		api: state.providerVal.api ?? "openai-completions",
+		api,
 		models,
 	});
 	return true;

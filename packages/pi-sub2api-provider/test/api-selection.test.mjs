@@ -97,6 +97,11 @@ async function runChild() {
 		assert.fail("models cache for logged-out provider was not cleared");
 	}
 
+	if (process.env.PI_TEST_PRINT_BASE_URL === "1") {
+		console.log(registrations[0]?.baseUrl ?? "");
+		return;
+	}
+
 	const expectedRegistrations = Number(
 		process.env.PI_EXPECTED_REGISTRATIONS ?? "1",
 	);
@@ -116,6 +121,8 @@ function runScenario(
 		testUsageStyle,
 		liveLogout = false,
 		usageSwitch = false,
+		baseUrl = "https://example.test/v1",
+		printBaseUrl = false,
 	} = {},
 ) {
 	const home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sub2api-home-"));
@@ -126,7 +133,7 @@ function runScenario(
 		JSON.stringify({
 			providers: {
 				test: {
-					baseUrl: "https://example.test/v1",
+					baseUrl,
 					...(api ? { api } : {}),
 					...(includeModels ? { models: [{ id: "test-model" }] } : {}),
 				},
@@ -168,6 +175,7 @@ function runScenario(
 						? "1"
 						: "0",
 				PI_REMOTE_MODELS_UNAVAILABLE: remoteModelsUnavailable ? "1" : "0",
+				...(printBaseUrl ? { PI_TEST_PRINT_BASE_URL: "1" } : {}),
 				...(liveLogout ? { PI_LIVE_LOGOUT_CHILD: "1" } : {}),
 				...(usageSwitch ? { PI_USAGE_SWITCH_CHILD: "1" } : {}),
 				...(testUsageStyle ? { PI_TEST_USAGE_STYLE: testUsageStyle } : {}),
@@ -211,7 +219,38 @@ if (process.env.PI_API_SELECTION_CHILD === "1") {
 		assert.equal(
 			runScenario(compiledExtension, { api: "openai-responses" }).stdout,
 			"openai-responses",
-		);
+			);
+		assert.equal(
+			runScenario(compiledExtension, { api: "anthropic-messages" }).stdout,
+			"anthropic-messages",
+			);
+
+		// Registration-level base URL contract per API adapter: OpenAI adapters keep the
+		// trailing /v1; anthropic-messages must NOT, because the Anthropic SDK appends its
+		// own /v1/messages (a trailing /v1 produced <base>/v1/v1/messages → 404).
+		const openaiBase = runScenario(compiledExtension, { printBaseUrl: true });
+		assert.equal(openaiBase.stdout, "https://example.test/v1");
+		const openaiBaseNoV1 = runScenario(compiledExtension, {
+			baseUrl: "https://example.test",
+			printBaseUrl: true,
+		});
+		assert.equal(openaiBaseNoV1.stdout, "https://example.test/v1");
+		const responsesBase = runScenario(compiledExtension, {
+			api: "openai-responses",
+			printBaseUrl: true,
+		});
+		assert.equal(responsesBase.stdout, "https://example.test/v1");
+		const anthropicBase = runScenario(compiledExtension, {
+			api: "anthropic-messages",
+			printBaseUrl: true,
+		});
+		assert.equal(anthropicBase.stdout, "https://example.test");
+		const anthropicBaseNoV1 = runScenario(compiledExtension, {
+			api: "anthropic-messages",
+			baseUrl: "https://example.test",
+			printBaseUrl: true,
+		});
+		assert.equal(anthropicBaseNoV1.stdout, "https://example.test");
 		const unavailableModels = runScenario(compiledExtension, {
 			includeModels: false,
 			remoteModelsUnavailable: true,
@@ -274,10 +313,49 @@ if (process.env.PI_API_SELECTION_CHILD === "1") {
 		const {
 			renderProgressBar,
 			buildRegisteredModels,
+			resolveApiBaseUrl,
 			formatStatusText,
 			normalizeUsageStyle,
 			resolveUsageStyle,
 		} = await import(pathToFileURL(compiledExtension).href);
+		const baseUrlCases = [
+			["https://example.test/v1", "anthropic-messages", "https://example.test"],
+			["https://example.test/v1/", "anthropic-messages", "https://example.test"],
+			["https://example.test", "anthropic-messages", "https://example.test"],
+			["https://example.test/step_plan", "anthropic-messages", "https://example.test/step_plan"],
+			["https://example.test/step_plan/v1", "anthropic-messages", "https://example.test/step_plan"],
+			["https://example.test/v1", "openai-completions", "https://example.test/v1"],
+			["https://example.test", "openai-completions", "https://example.test/v1"],
+			["https://example.test", "openai-responses", "https://example.test/v1"],
+			["https://example.test/v1", undefined, "https://example.test/v1"],
+			["https://example.test/step_plan", undefined, "https://example.test/step_plan/v1"],
+		];
+		for (const [base, api, expected] of baseUrlCases) {
+			assert.equal(
+				resolveApiBaseUrl(base, api),
+				expected,
+				`resolveApiBaseUrl(${base}, ${api})`,
+			);
+		}
+		// Anthropic models are registered without a trailing /v1 on every per-model entry.
+		const anthropicModels = buildRegisteredModels(
+			{ baseUrl: "https://example.test/v1", api: "anthropic-messages", models: [{ id: "a" }, { id: "b" }] },
+			"anthropic-messages",
+		);
+		assert.deepEqual(
+			anthropicModels.map((m) => m.baseUrl),
+			["https://example.test", "https://example.test"],
+		);
+		// A per-model baseUrl override is respected verbatim.
+		const overridden = buildRegisteredModels(
+			{
+				baseUrl: "https://example.test/v1",
+				api: "anthropic-messages",
+				models: [{ id: "a", baseUrl: "https://other.test/v1" }],
+			},
+			"anthropic-messages",
+		);
+		assert.equal(overridden[0].baseUrl, "https://other.test/v1");
 		const reasoningCases = [
 			{ id: "gpt-6-astra", expected: true },
 			{ id: "gpt-6-luna", expected: true },
@@ -295,6 +373,7 @@ if (process.env.PI_API_SELECTION_CHILD === "1") {
 		for (const { id, remote, local, expected } of reasoningCases) {
 			const [model] = buildRegisteredModels(
 				{ models: local === undefined ? [] : [{ id, reasoning: local }] },
+				"openai-completions",
 				[{ id, reasoning: remote }],
 			);
 			const label = JSON.stringify({ id, remote, local });
@@ -302,7 +381,8 @@ if (process.env.PI_API_SELECTION_CHILD === "1") {
 			assert.equal(Boolean(model.thinkingLevelMap), expected, label);
 		}
 		assert.equal(
-			buildRegisteredModels({ models: [{ id: "gpt-6-astra" }] })[0].reasoning,
+			buildRegisteredModels({ models: [{ id: "gpt-6-astra" }] }, "openai-completions")[0]
+				.reasoning,
 			true,
 		);
 		assert.equal(renderProgressBar(0, 5), "[⡀⡀⡀⡀⡀]");

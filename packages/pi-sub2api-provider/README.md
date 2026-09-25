@@ -116,6 +116,37 @@ The provider defaults to `openai-completions`. To opt into Pi's generic OpenAI R
 
 `openai-responses` uses the HTTP/SSE Responses API in this integration. It does not enable WebSocket transport or `websocket-cached`; a Sub2API WebSocket adapter is not included.
 
+### Anthropic Messages (`anthropic-messages`)
+
+Set `api` to `anthropic-messages` to talk to an upstream that exposes the Anthropic Messages
+route. This adapter is supported as long as the upstream actually answers on
+`{baseUrl}/v1/messages`; a gateway that only exposes OpenAI-compatible routes still returns 404.
+
+The base URL convention differs per adapter, and this package normalizes it for you:
+
+| `api` | Request path | `baseUrl` in `models.json` |
+|---|---|---|
+| `openai-completions` / `openai-responses` | `{baseUrl}/v1/chat/completions`, `{baseUrl}/v1/responses` | with or without `/v1` — `/v1` is appended when missing |
+| `anthropic-messages` | `{baseUrl}/v1/messages` | with or without `/v1` — a trailing `/v1` is stripped, because the Anthropic SDK adds it |
+
+```json
+{
+  "providers": {
+    "stepfun": {
+      "baseUrl": "https://api.stepfun.com/step_plan",
+      "api": "anthropic-messages",
+      "models": [{ "id": "step-5-preview", "reasoning": true }]
+    }
+  }
+}
+```
+
+Without that stripping the request was sent to `https://api.stepfun.com/step_plan/v1/v1/messages`
+and the router answered `404`. Both `baseUrl` spellings now register the same, correct endpoint.
+
+A model entry may also carry its own `api` / `baseUrl` override; a `baseUrl` written there is used
+verbatim (no `/v1` adjustment).
+
 ## Settings
 
 Configure the status bar usage display style in global `~/.pi/agent/settings.json` or project `.pi/settings.json`:

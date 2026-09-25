@@ -98,6 +98,36 @@ cp /Users/derek/workspaces/pi-extensions/packages/pi-sub2api-provider/src/index.
 
 > 安全说明：本仓库不保存、不复制任何 API key 或 auth 文件。
 
+## API adapter
+
+默认使用 `openai-completions`。通过 `api` 字段可显式切换到其他 adapter。
+
+| `api` | 请求路径 | `models.json` 中的 `baseUrl` |
+|---|---|---|
+| `openai-completions` / `openai-responses`（默认 `openai-completions`） | `{baseUrl}/v1/chat/completions`、`{baseUrl}/v1/responses` | 带或不带 `/v1` 都可以：缺失时自动补 `/v1` |
+| `anthropic-messages` | `{baseUrl}/v1/messages` | 带或不带 `/v1` 都可以：末尾的 `/v1` 会被去掉，因为 Anthropic SDK 自己会拼 |
+
+```jsonc
+// ~/.pi/agent/models.json
+{
+  "providers": {
+    "stepfun": {
+      "baseUrl": "https://api.stepfun.com/step_plan",
+      "api": "anthropic-messages",
+      "models": [{ "id": "step-5-preview", "reasoning": true }]
+    }
+  }
+}
+```
+
+如果没有这层归一化，请求会打到 `https://api.stepfun.com/step_plan/v1/v1/messages`，上游返回
+`404`。现在两种 `baseUrl` 写法都会注册成同一个正确地址。
+
+注意：`anthropic-messages` 仍要求上游确实暴露 `{baseUrl}/v1/messages` 路由；只提供
+OpenAI 兼容路由的 sub2api 部署换了 adapter 也依然是 404。
+
+单条 `models` 条目里也可以写自己的 `api` / `baseUrl`；其中 `baseUrl` 会按原样使用，不再做 `/v1` 调整。
+
 ## 设置选项
 
 可在全局 `~/.pi/agent/settings.json` 或项目 `.pi/settings.json` 中配置状态栏用量显示样式：
