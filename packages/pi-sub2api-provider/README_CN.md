@@ -128,6 +128,24 @@ OpenAI 兼容路由的 sub2api 部署换了 adapter 也依然是 404。
 
 单条 `models` 条目里也可以写自己的 `api` / `baseUrl`；其中 `baseUrl` 会按原样使用，不再做 `/v1` 调整。
 
+### 接管范围
+
+`registerProvider` 的优先级高于 `models.json` 和 pi 内置 catalog，所以只有在 pi 自己解析不了时，
+本扩展才会接管整个 provider：
+
+| Provider | 注册内容 | 原因 |
+|---|---|---|
+| 自定义 id，凭据是 `auth.json` 里的 api-key | 全套（`name`/`api`/`baseUrl`/`apiKey`/`authHeader`/`models`） | pi 对「自定义 id + 凭据只在 auth.json」会报 `credentials_not_configured` |
+| `auth.json` 里是 `oauth` 凭据 | 只注册 models | pi 自己管 OAuth 刷新与原生流；原始 access token 不会被当成 Bearer key 发出 |
+| `models.json` 自带 `apiKey` / `headers` | 只注册 models | pi 原生就能解析 |
+| 内置 provider id（`anthropic`、`openai`、`xai` …） | 只注册 models | provider 定义（`api`/`baseUrl`/鉴权/模型列表）归 pi 所有 |
+
+“只注册 models”模式下，`name`、`api`、`baseUrl`、`apiKey`、`authHeader` 全部不传，各自回退到 pi
+自己的层。模型自动拉取不受影响：如果 pi 无法为这些模型推断出 `api` / `baseUrl`（它会在改动任何
+已存配置**之前**报错），注册会自动升级为全套形式。
+
+可以用 `pi auth check --provider <id> --json` 观察实际生效的形式。
+
 ## 设置选项
 
 可在全局 `~/.pi/agent/settings.json` 或项目 `.pi/settings.json` 中配置状态栏用量显示样式：

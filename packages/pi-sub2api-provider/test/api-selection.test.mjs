@@ -97,6 +97,11 @@ async function runChild() {
 		assert.fail("models cache for logged-out provider was not cleared");
 	}
 
+	if (process.env.PI_TEST_PRINT_REGISTRATION === "1") {
+		console.log(JSON.stringify(registrations[0] ?? null));
+		return;
+	}
+
 	if (process.env.PI_TEST_PRINT_BASE_URL === "1") {
 		console.log(registrations[0]?.baseUrl ?? "");
 		return;
@@ -113,6 +118,7 @@ function runScenario(
 	compiledExtension,
 	{
 		api,
+		providerId = "test",
 		includeModels = true,
 		remoteModelsUnavailable = false,
 		auth = { test: { type: "api-key", key: "test-key" } },
@@ -122,7 +128,9 @@ function runScenario(
 		liveLogout = false,
 		usageSwitch = false,
 		baseUrl = "https://example.test/v1",
+		inlineApiKey = false,
 		printBaseUrl = false,
+		printRegistration = false,
 	} = {},
 ) {
 	const home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sub2api-home-"));
@@ -132,9 +140,10 @@ function runScenario(
 		path.join(agentDir, "models.json"),
 		JSON.stringify({
 			providers: {
-				test: {
+				[providerId]: {
 					baseUrl,
 					...(api ? { api } : {}),
+					...(inlineApiKey ? { apiKey: "inline-key" } : {}),
 					...(includeModels ? { models: [{ id: "test-model" }] } : {}),
 				},
 				...(usageSwitch
@@ -171,11 +180,12 @@ function runScenario(
 				PI_TEST_EXTENSION: compiledExtension,
 				PI_EXPECTED_REGISTRATIONS: usageSwitch
 					? "2"
-					: includeModels && auth.test
+					: includeModels && auth[providerId]
 						? "1"
 						: "0",
 				PI_REMOTE_MODELS_UNAVAILABLE: remoteModelsUnavailable ? "1" : "0",
 				...(printBaseUrl ? { PI_TEST_PRINT_BASE_URL: "1" } : {}),
+				...(printRegistration ? { PI_TEST_PRINT_REGISTRATION: "1" } : {}),
 				...(liveLogout ? { PI_LIVE_LOGOUT_CHILD: "1" } : {}),
 				...(usageSwitch ? { PI_USAGE_SWITCH_CHILD: "1" } : {}),
 				...(testUsageStyle ? { PI_TEST_USAGE_STYLE: testUsageStyle } : {}),
@@ -251,6 +261,47 @@ if (process.env.PI_API_SELECTION_CHILD === "1") {
 			printBaseUrl: true,
 		});
 		assert.equal(anthropicBaseNoV1.stdout, "https://example.test");
+
+		// Registration scope: whenever pi can resolve a provider on its own, the extension
+		// must contribute models ONLY, so name/api/baseUrl/apiKey/authHeader keep falling back
+		// to pi's own layers instead of being overridden by this extension.
+		const registration = (overrides) =>
+			JSON.parse(
+				runScenario(compiledExtension, { printRegistration: true, ...overrides }).stdout,
+			);
+
+		// Custom id whose only credential lives in auth.json — the one case that genuinely
+		// needs the extension to supply the key (pi reports credentials_not_configured).
+		const custom = registration({});
+		assert.equal(custom.name, "test");
+		assert.equal(custom.api, "openai-completions");
+		assert.equal(custom.apiKey, "test-key");
+		assert.equal(custom.authHeader, true);
+		assert.equal(custom.baseUrl, "https://example.test/v1");
+		assert.equal(custom.models[0].baseUrl, "https://example.test/v1");
+
+		// OAuth credential — the raw access token must never be injected as a Bearer key.
+		const oauth = registration({
+			auth: { test: { type: "oauth", access: "oauth-access", refresh: "r" } },
+		});
+		assert.deepEqual(Object.keys(oauth).sort(), ["models"]);
+		assert.equal(oauth.models.length, 1);
+		assert.equal(oauth.models[0].baseUrl, undefined);
+
+		// models.json declares its own credentials.
+		const inline = registration({ inlineApiKey: true });
+		assert.deepEqual(Object.keys(inline).sort(), ["models"]);
+		assert.equal(inline.models[0].baseUrl, undefined);
+
+		// Built-in provider id — pi owns the catalog definition (auth, api, baseUrl).
+		const builtin = registration({
+			providerId: "anthropic",
+			auth: { anthropic: { type: "api-key", key: "sk-anthropic" } },
+			api: "anthropic-messages",
+			baseUrl: "https://proxy.test",
+		});
+		assert.deepEqual(Object.keys(builtin).sort(), ["models"]);
+		assert.equal(builtin.models[0].baseUrl, undefined);
 		const unavailableModels = runScenario(compiledExtension, {
 			includeModels: false,
 			remoteModelsUnavailable: true,
@@ -314,6 +365,9 @@ if (process.env.PI_API_SELECTION_CHILD === "1") {
 			renderProgressBar,
 			buildRegisteredModels,
 			resolveApiBaseUrl,
+			resolveRegistrationScope,
+			isBuiltinProviderId,
+			BUILTIN_PROVIDER_IDS,
 			formatStatusText,
 			normalizeUsageStyle,
 			resolveUsageStyle,
@@ -356,6 +410,52 @@ if (process.env.PI_API_SELECTION_CHILD === "1") {
 			"anthropic-messages",
 		);
 		assert.equal(overridden[0].baseUrl, "https://other.test/v1");
+
+		// resolveRegistrationScope decision table
+		const base = { baseUrl: "https://demo.test/v1" };
+		const scopeCases = [
+			["custom id + auth.json api key", "stepfun", base, "api_key", false],
+			["oauth credential", "stepfun", base, "oauth", true],
+			["missing credential type", "stepfun", base, undefined, false],
+			["models.json apiKey", "stepfun", { ...base, apiKey: "$K" }, "api_key", true],
+			["models.json headers", "stepfun", { ...base, headers: { a: "b" } }, "api_key", true],
+			["built-in id", "anthropic", base, "api_key", true],
+			["built-in id + oauth", "xai", base, "oauth", true],
+		];
+		for (const [label, providerId, providerVal, credentialType, expected] of scopeCases) {
+			const scope = resolveRegistrationScope(providerId, providerVal, credentialType);
+			assert.equal(scope.minimal, expected, label);
+			assert.ok(typeof scope.reason === "string" && scope.reason.length > 0, label);
+		}
+		assert.ok(BUILTIN_PROVIDER_IDS.has("anthropic"));
+		assert.ok(BUILTIN_PROVIDER_IDS.has("openai"));
+		assert.ok(!BUILTIN_PROVIDER_IDS.has("stepfun"));
+		assert.equal(isBuiltinProviderId("xai"), true);
+
+		// The bundled built-in id list is a snapshot of pi's catalog; assert it still covers the
+		// pi version installed as a dev dependency so catalog drift is caught by tests.
+		try {
+			const resolved = await import.meta.resolve("@earendil-works/pi-coding-agent");
+			const piPackageDir = path.resolve(fileURLToPath(resolved), "..", "..");
+			const catalogPath = path.join(
+				piPackageDir,
+				"node_modules",
+				"@earendil-works",
+				"pi-ai",
+				"dist",
+				"providers",
+				"all.js",
+			);
+			const catalog = await import(pathToFileURL(catalogPath).href);
+			const missing = catalog
+				.builtinProviders()
+				.map((provider) => provider.id)
+				.filter((id) => !BUILTIN_PROVIDER_IDS.has(id));
+			assert.deepEqual(missing, [], `built-in catalog ids missing from BUILTIN_PROVIDER_IDS: ${missing.join(", ")}`);
+		} catch (e) {
+			if (e instanceof assert.AssertionError) throw e;
+			console.error(`skipped catalog coverage check: ${e.message}`);
+		}
 		const reasoningCases = [
 			{ id: "gpt-6-astra", expected: true },
 			{ id: "gpt-6-luna", expected: true },

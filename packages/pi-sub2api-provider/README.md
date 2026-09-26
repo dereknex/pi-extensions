@@ -147,6 +147,25 @@ and the router answered `404`. Both `baseUrl` spellings now register the same, c
 A model entry may also carry its own `api` / `baseUrl` override; a `baseUrl` written there is used
 verbatim (no `/v1` adjustment).
 
+### What this package overrides
+
+`registerProvider` outranks both `models.json` and Pi's built-in catalog, so this package only takes
+over a provider when Pi cannot resolve it on its own:
+
+| Provider | Registration | Why |
+|---|---|---|
+| Custom id, `api-key` credential in `auth.json` | Full (`name`, `api`, `baseUrl`, `apiKey`, `authHeader`, `models`) | Pi reports `credentials_not_configured` for a custom id whose only credential lives in `auth.json` |
+| `oauth` credential in `auth.json` | Models only | Pi owns the OAuth refresh and native stream; the raw access token is never sent as a Bearer key |
+| `models.json` declares its own `apiKey` / `headers` | Models only | Pi resolves those natively |
+| Built-in provider id (`anthropic`, `openai`, `xai`, …) | Models only | Pi owns the catalog definition: `api`, `baseUrl`, auth and model list |
+
+In “models only” mode `name`, `api`, `baseUrl`, `apiKey` and `authHeader` are all omitted so they fall
+back to Pi's own layers. Model discovery still happens: if Pi cannot infer `api` / `baseUrl` for the
+models (it raises that error before touching any stored config), the registration escalates to the
+full form.
+
+Run `pi auth check --provider <id> --json` to see which form applies in practice.
+
 ## Settings
 
 Configure the status bar usage display style in global `~/.pi/agent/settings.json` or project `.pi/settings.json`:

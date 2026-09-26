@@ -320,6 +320,10 @@ interface ProviderConfig {
 	baseUrl: string;
 	api?: string;
 	models?: ProviderModelConfig[];
+	/** Inline credential declared in models.json; pi resolves it without an extension layer. */
+	apiKey?: string;
+	/** Custom headers declared in models.json. */
+	headers?: Record<string, string>;
 }
 
 interface ModelsConfig {
@@ -406,6 +410,8 @@ interface LazyProviderState {
 	baseUrl: string;
 	modelsBase: string;
 	apiKey: string;
+	/** `auth.json` credential type (`api_key` / `oauth`) for this provider, when known. */
+	credentialType?: string;
 	providerVal: ProviderConfig;
 	usageUrl?: string | null;
 	quotaProbePromise?: Promise<boolean>;
@@ -416,6 +422,62 @@ interface LazyProviderState {
 }
 
 const lazyProviders = new Map<string, LazyProviderState>();
+
+/**
+ * Provider ids that pi defines natively (its bundled model catalog).
+ *
+ * Snapshot of `builtinProviders()` from `@earendil-works/pi-ai/providers/all`; the test suite
+ * asserts it still covers the installed pi version. Providers in this set already have a
+ * complete pi-side definition (auth, api, baseUrl, model list), so this extension must only
+ * contribute discovered models instead of replacing the provider.
+ */
+export const BUILTIN_PROVIDER_IDS: ReadonlySet<string> = new Set([
+	"amazon-bedrock",
+	"ant-ling",
+	"anthropic",
+	"azure-openai-responses",
+	"baseten",
+	"cerebras",
+	"cloudflare-ai-gateway",
+	"cloudflare-workers-ai",
+	"deepseek",
+	"fireworks",
+	"github-copilot",
+	"google",
+	"google-vertex",
+	"groq",
+	"huggingface",
+	"kimi-coding",
+	"meta",
+	"minimax",
+	"minimax-cn",
+	"mistral",
+	"moonshotai",
+	"moonshotai-cn",
+	"nvidia",
+	"openai",
+	"openai-codex",
+	"opencode",
+	"opencode-go",
+	"openrouter",
+	"qwen-token-plan",
+	"qwen-token-plan-cn",
+	"qwen-token-plan-individual",
+	"radius",
+	"together",
+	"vercel-ai-gateway",
+	"xai",
+	"xiaomi",
+	"xiaomi-token-plan-ams",
+	"xiaomi-token-plan-cn",
+	"xiaomi-token-plan-sgp",
+	"zai",
+	"zai-coding-cn",
+]);
+
+export function isBuiltinProviderId(providerId: string): boolean {
+	return BUILTIN_PROVIDER_IDS.has(providerId);
+}
 
 function getModelsBase(baseUrl: string): string {
 	return baseUrl.endsWith("/v1")
@@ -516,15 +578,90 @@ function buildRegisteredModels(
 	});
 }
 
+/**
+ * Why a provider is (or is not) registered in the minimal "models only" form.
+ */
+export interface RegistrationScope {
+	minimal: boolean;
+	reason: string;
+}
+
+/**
+ * Decide how much of a provider this extension may override.
+ *
+ * `registerProvider` is the only way to contribute models, and its config layer outranks both
+ * `models.json` and pi's built-in catalog. Whenever pi can resolve the provider on its own,
+ * the extension must contribute models *only* so that `name`, `api`, `baseUrl`, `apiKey`
+ * and `authHeader` keep falling back to pi's own layers:
+ *
+ *   baseUrl    -> models.json / built-in
+ *   api        -> per-model value inherited from the composed model list
+ *   apiKey     -> models.json `apiKey`, or the built-in credential (OAuth refresh included)
+ *   authHeader -> models.json `authHeader`
+ */
+export function resolveRegistrationScope(
+	providerId: string,
+	providerVal: ProviderConfig,
+	credentialType?: string,
+): RegistrationScope {
+	if (credentialType === "oauth") {
+		// An OAuth access token is managed by pi (refresh, native stream); injecting it as a
+		// plain Bearer key sends the raw, possibly expired token.
+		return { minimal: true, reason: "oauth credential managed by pi" };
+	}
+	if (providerVal.apiKey !== undefined || providerVal.headers !== undefined) {
+		return { minimal: true, reason: "models.json declares its own credentials" };
+	}
+	if (isBuiltinProviderId(providerId)) {
+		return { minimal: true, reason: "pi owns this provider's catalog definition" };
+	}
+	// A custom provider id whose only credential lives in auth.json: pi cannot resolve it
+	// natively, so the extension has to supply the key.
+	return { minimal: false, reason: "custom provider with an auth.json api key" };
+}
+
+function stripRegistrationBaseUrl(model: any): any {
+	if (!model || !("baseUrl" in model)) return model;
+	const { baseUrl: _omitted, ...rest } = model;
+	return rest;
+}
+
 function registerProviderModels(
 	pi: ExtensionAPI,
 	providerId: string,
-	state: Pick<LazyProviderState, "baseUrl" | "apiKey" | "providerVal">,
+	state: Pick<
+		LazyProviderState,
+		"baseUrl" | "apiKey" | "credentialType" | "providerVal"
+	>,
 	fetchedModels?: any[],
 ): boolean {
 	const api = state.providerVal.api ?? "openai-completions";
 	const models = buildRegisteredModels(state.providerVal, api, fetchedModels);
 	if (!models.length) return false;
+
+	const scope = resolveRegistrationScope(
+		providerId,
+		state.providerVal,
+		state.credentialType,
+	);
+	if (scope.minimal) {
+		try {
+			pi.registerProvider(providerId, {
+				models: models.map(stripRegistrationBaseUrl),
+			});
+			return true;
+		} catch (e) {
+			// Pi validates a registration before touching any stored config, so this throw means
+			// it could not infer `api` / `baseUrl` from its own layers (typically the provider has
+			// no composable models yet). Escalating keeps model discovery working.
+			debugQuotaLog(
+				`[sub2api-quota] Minimal registration rejected for ${providerId} (${scope.reason}): ${
+					e instanceof Error ? e.message : String(e)
+				}`,
+			);
+		}
+	}
+
 	pi.registerProvider(providerId, {
 		name: providerId,
 		baseUrl: resolveApiBaseUrl(state.baseUrl, api),
@@ -1254,6 +1391,7 @@ export default async function (pi: ExtensionAPI) {
 					baseUrl,
 					modelsBase: getModelsBase(baseUrl),
 					apiKey,
+					credentialType: authEntry?.type,
 					providerVal,
 					modelsLoaded: false,
 					cachedModels: readModelsCache(providerId),
