@@ -22,7 +22,7 @@ assert.ok(manifest.files?.includes("README.md") && manifest.files?.includes("LIC
 assert.equal(manifest.scripts?.check, "tsc --noEmit");
 assert.ok(manifest.scripts?.test, "the package declares a test script");
 assert.equal(manifest.scripts?.["pack:dry-run"], "npm pack --dry-run");
-assert.ok(manifest.dependencies?.["@earendil-works/pi-tui"], "the patched runtime is a dependency");
+assert.ok(manifest.peerDependencies?.["@earendil-works/pi-tui"], "the patched runtime is a peerDependency");
 assert.ok(manifest.peerDependencies?.["@earendil-works/pi-coding-agent"]);
 
 // --- documentation -------------------------------------------------------------
