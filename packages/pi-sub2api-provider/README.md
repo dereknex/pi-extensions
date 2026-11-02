@@ -17,9 +17,15 @@ Part of the [pi-extensions](https://github.com/dereknex/pi-extensions) monorepo.
 - Auto-detects the usage endpoint:
   - `${baseUrl}/usage`
   - `${root}/v1/usage`
+  - magpie gateways: `${root}/v1/magpie/quotas?kept=1` (the cached read, so no vendor is asked).
+    The status bar shows the account the current model belongs to, most-used window first; `/quota`
+    lists every account behind the gateway.
 - Fetches and caches rate limit / daily usage.
-- Pulls `${baseUrl}/models` and prefers the remote model list, falling back to locally configured models only when the remote endpoint is unavailable.
-- Reads remote model limit metadata when present (`context_window`, `max_tokens`, and common aliases), with conservative built-in fallbacks for endpoints that only return `id` / `display_name`.
+- Pulls `${baseUrl}/models` and registers `refreshModels`, so `/model` (and `pi update --models`) reloads the live catalog instead of the frozen list in `models.json`.
+- Merges the remote list with `models.json`: locally configured values win (`api`, `baseUrl`, `reasoning`, `input`, `cost`, `contextWindow`, `maxTokens`, `thinkingLevelMap`), and a locally configured model the upstream does not list is kept. When the endpoint is unavailable or pi asks for an offline refresh, the locally configured / cached list is used and no error is reported.
+- Reads remote model metadata when present, with conservative built-in fallbacks for endpoints that only return `id` / `display_name`:
+  - limits: `context_window` / `context_length` / `max_input_tokens`, `max_output_tokens` / `max_tokens` / `max_completion_tokens`;
+  - magpie gateways: `modalities.input` → `input`, `reasoning_levels` → `thinkingLevelMap` (a level the model lacks is hidden), `pricing` (USD per token) → `cost` (USD per million tokens).
 - Registers providers via `pi.registerProvider()`.
 - Refreshes / displays quota on `session_start`, `model_select`, and `turn_end`.
 - Registers a `/quota` command that shows detailed billing and quota for the current provider.
@@ -147,6 +153,85 @@ and the router answered `404`. Both `baseUrl` spellings now register the same, c
 A model entry may also carry its own `api` / `baseUrl` override; a `baseUrl` written there is used
 verbatim (no `/v1` adjustment).
 
+### magpie gateways
+
+[magpie](https://github.com/yetone/magpie) runs a gateway (by default `http://127.0.0.1:3425`) that
+speaks the OpenAI, Responses, Anthropic and Gemini APIs, so pi reaches it like any other provider.
+The per-model `models` array is optional — the catalog loads by itself:
+
+```jsonc
+// ~/.pi/agent/models.json
+{
+  "providers": {
+    "my-magpie": {
+      "api": "openai-responses",
+      "baseUrl": "https://magpie.example.com/v1"
+    }
+  }
+}
+```
+
+```jsonc
+// ~/.pi/agent/auth.json
+{
+  "my-magpie": { "type": "api_key", "key": "<magpie gateway key>" }
+}
+```
+
+`baseUrl` may be the gateway root or its `/v1`; both register the same endpoint. The key is the one
+magpie shows on its **Gateway** page — on this machine's loopback magpie takes any request, from
+another machine it wants the LAN sharing key.
+
+**Models load by themselves.** The gateway's `/v1/models` is pulled whenever pi refreshes its
+catalog — opening `/model`, `pi update --models`, `pi --list-models` — and the window, reply cap,
+input modalities, thinking levels and price come from that response. Anything you write in
+`models.json` still wins (`api`, `baseUrl`, `reasoning`, `input`, `cost`, `contextWindow`,
+`maxTokens`, `thinkingLevelMap`), and a model you configured that magpie does not list is kept.
+
+**Quota comes from magpie.** `/v1/usage` answers `404`, so the probe falls through to
+`/v1/magpie/quotas?kept=1` — magpie's cached read, which asks no vendor:
+
+- the status bar shows the account the current model belongs to (`codex/gpt-6.1-sol` → magpie's
+  `codex` card), its most-used window first, at most three:
+
+  ```text
+  ● my-magpie codex w [⣿⣤⡀⡀⡀] · 5h [⣤⡀⡀⡀⡀]
+  ● my-magpie example Credits [⣿⣿⣿⣿⣿] · w [⡀⡀⡀⡀⡀] · 4h [⡀⡀⡀⡀⡀]
+  ```
+
+  and with `"statusBarUsage": "numeric"`:
+
+  ```text
+  ● my-magpie codex w 31% · 5h 10%
+  ```
+
+- `/quota` asks magpie for a fresh read and lists every account behind the gateway, each window with
+  its percentage, reset time and magpie's own `0 / 500` / `1500 / 1600` rendering:
+
+  ```text
+  Provider:     my-magpie
+  Source:       magpie (https://magpie.example.com/v1/magpie/quotas)
+  Accounts:     2
+
+  Codex (codex) · subscription · plus · you@example.com
+    5 hours          0%  [⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀]  resets 03/11/2026, 3:16:15 am
+    7 days          31%  [⣿⣿⣿⡀⡀⡀⡀⡀⡀⡀]  resets 09/11/2026, 11:11:16 am
+  Example AI (example) · subscription · Free plan · you@example.com
+    Credits          0%  [⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀]  0 / 500  resets 30/11/2026, 11:59:59 pm
+    Extra credits   94%  [⣿⣿⣿⣿⣿⣿⣿⣿⣿⣤]  1500 / 1600
+  ```
+
+Not shown: magpie's reset counts (`resets`), why an account was passed over (`holdsWhy`), and its
+token/cost summary (`/v1/magpie/usage`).
+
+> magpie's own **Agents → Pi** connection writes a provider named `magpie` into
+> `~/.pi/agent/models.json` with its key inline. This package only manages providers whose credential
+> is in `auth.json`, so it leaves that one alone: pi works, but no quota is shown. Add the gateway as
+> your own provider with the key in `auth.json` (above) to get both.
+
+If no quota appears, run pi with `SUB2API_QUOTA_DEBUG=1` to see which endpoint was probed and why it
+was rejected.
+
 ### What this package overrides
 
 `registerProvider` outranks both `models.json` and Pi's built-in catalog, so this package only takes
@@ -239,6 +324,13 @@ The status bar will show something like:
   ```text
   ● my-sub2api d 25% · w 50%
   ```
+- A magpie gateway (see [magpie gateways](#magpie-gateways)):
+  ```text
+  ● my-magpie codex w [⣿⣤⡀⡀⡀] · 5h [⣤⡀⡀⡀⡀]
+  ```
+
+`/quota` prints the full detail for the active provider to the console (accounts, plans, every
+window, reset times, today/total usage where the provider reports it).
 
 ## License
 

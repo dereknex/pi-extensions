@@ -39,20 +39,27 @@ function isRetryableError(e: unknown): boolean {
  * "Aborted after 1 retry attempt"）。这里主动重试，并把
  * 最终错误吃掉返回 null，避免异常逃逸到扩展顶层导致 pi 崩溃。
  * 对齐 CodexBar 的 15s 超时。
+ *
+ * `init.signal` 是调用方（pi 的模型刷新）的取消信号：与超时信号合并，
+ * 调用方取消后不再重试。
  */
 async function fetchWithRetry(
 	url: string,
 	init: RequestInit & { timeoutMs?: number } = {},
 	retries = 2,
 ): Promise<Response | null> {
-	const { timeoutMs = 15000, ...rest } = init;
+	const { timeoutMs = 15000, signal, ...rest } = init;
 	for (let attempt = 0; attempt <= retries; attempt++) {
 		try {
 			return await fetch(url, {
 				...rest,
-				signal: AbortSignal.timeout(timeoutMs),
+				signal: signal
+					? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
+					: AbortSignal.timeout(timeoutMs),
 			});
 		} catch (e) {
+			// 调用方取消：不再重试
+			if (signal?.aborted) break;
 			// 业务错误（非网络类）不重试，直接返回 null
 			if (!isRetryableError(e)) break;
 			if (attempt < retries) {
@@ -316,6 +323,79 @@ function pickRemoteMaxTokens(model: any): number | undefined {
 	);
 }
 
+/**
+ * 远端声明的输入模态（magpie `/v1/models` 的 `modalities.input`）。
+ * 未声明或声明里没有可用值时返回 undefined，由调用方回退。
+ */
+function pickRemoteInput(model: any): Array<"text" | "image"> | undefined {
+	const raw = model?.modalities?.input;
+	if (!Array.isArray(raw)) return undefined;
+	const input = raw.filter(
+		(value: unknown): value is "text" | "image" =>
+			value === "text" || value === "image",
+	);
+	return input.length ? input : undefined;
+}
+
+/**
+ * 远端价格换算成 pi 的单位。
+ *
+ * magpie `/v1/models` 的 `pricing` 是「每 token 的 USD」字符串
+ * （`prompt` / `completion` / `input_cache_read` / `input_cache_write`），
+ * pi 的模型 cost 是「每百万 token 的 USD」。
+ */
+function pickRemoteCost(model: any): ModelCost | undefined {
+	const pricing = model?.pricing;
+	if (!pricing || typeof pricing !== "object") return undefined;
+	const perMillion = (value: unknown): number | undefined => {
+		const perToken = safeFiniteNumber(value);
+		return perToken === null ? undefined : perToken * 1_000_000;
+	};
+	const input = perMillion(pricing.prompt);
+	const output = perMillion(pricing.completion);
+	if (input === undefined || output === undefined) return undefined;
+	return {
+		input,
+		output,
+		cacheRead: perMillion(pricing.input_cache_read) ?? 0,
+		cacheWrite: perMillion(pricing.input_cache_write) ?? 0,
+	};
+}
+
+/** pi 的思考等级，与 pi-ai 的 EXTENDED_THINKING_LEVELS 一致。 */
+const PI_THINKING_LEVELS = [
+	"off",
+	"minimal",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+	"max",
+] as const;
+
+/**
+ * 远端声明的思考等级（magpie `/v1/models` 的 `reasoning_levels`）转成 pi 的
+ * `thinkingLevelMap`：上游有的等级映射成它自己的名字，没有的映射为 null 让 pi
+ * 隐藏该档（与 magpie 自己写进 models.json 的映射一致）。
+ * pi 没有对应档位的上游名字（如 magpie 的 `ultra`）忽略。
+ */
+function pickRemoteThinkingLevelMap(model: any): ThinkingLevelMap | undefined {
+	const raw = model?.reasoning_levels;
+	if (!Array.isArray(raw)) return undefined;
+	const levels = new Set(
+		raw
+			.filter((value: unknown): value is string => typeof value === "string")
+			.map((value) => value.toLowerCase()),
+	);
+	if (!levels.size) return undefined;
+	const map: ThinkingLevelMap = {};
+	for (const level of PI_THINKING_LEVELS) {
+		const upstream = level === "off" ? "none" : level;
+		map[level] = levels.has(upstream) ? upstream : null;
+	}
+	return map;
+}
+
 interface ProviderConfig {
 	baseUrl: string;
 	api?: string;
@@ -382,8 +462,50 @@ interface UsageTotals {
 	cost: number;
 }
 
+/**
+ * A usage endpoint that answered: which shape it speaks, the URL polled on
+ * `turn_end`, and one that forces a fresh read for `/quota`.
+ *
+ * magpie's quota read is the cached one by default (`?kept=1`, no vendor is
+ * asked), so the two URLs differ there; a sub2api usage read is always live.
+ */
+interface UsageSource {
+	kind: "sub2api" | "magpie";
+	url: string;
+	refreshUrl: string;
+}
+
+/** One window of a magpie quota card, as `/v1/magpie/quotas` reports it. */
+interface MagpieWindow {
+	/** magpie's own name, as `/quota` prints it. */
+	name: string;
+	/** pi's window label, so the status bar keeps its `5h` / `w` / `m` style. */
+	label: string;
+	/** Percent used, 0–100, as magpie reports it. */
+	used: number;
+	remaining: number;
+	resetsAt: string | null;
+	/** magpie's own rendering, when it gives one (`0 / 500`, `472 / 700 credits`). */
+	display: string | null;
+}
+
+/** One account behind magpie, as `/v1/magpie/quotas` reports it. */
+interface MagpieCard {
+	/** The upstream a model id starts with (`codex` for `codex/gpt-6.1-sol`). */
+	provider: string;
+	name: string;
+	kind: string;
+	plan: string | null;
+	user: string | null;
+	balance: number | null;
+	unit: string;
+	readAt: string | null;
+	until: string | null;
+	windows: MagpieWindow[];
+}
+
 interface QuotaInfo {
-	baseUrl: string; // the canonical usage URL that succeeded
+	source: UsageSource;
 	apiKey: string;
 	rateLimits: RateLimit[];
 	dailyUsage: DailyUsage[];
@@ -402,6 +524,8 @@ interface QuotaInfo {
 	expiresAt: string | null;
 	todayUsage: UsageTotals | null;
 	totalUsage: UsageTotals | null;
+	/** The accounts behind a magpie gateway; null for a sub2api usage reply. */
+	magpie: MagpieCard[] | null;
 }
 
 const quotaProviders = new Map<string, QuotaInfo>();
@@ -413,7 +537,7 @@ interface LazyProviderState {
 	/** `auth.json` credential type (`api_key` / `oauth`) for this provider, when known. */
 	credentialType?: string;
 	providerVal: ProviderConfig;
-	usageUrl?: string | null;
+	usageSource?: UsageSource | null;
 	quotaProbePromise?: Promise<boolean>;
 	modelsLoadPromise?: Promise<void>;
 	modelsLoaded: boolean;
@@ -525,13 +649,23 @@ function buildRegisteredModels(
 	const configuredModels = new Map(
 		(providerVal.models || []).map((model) => [model.id.toLowerCase(), model]),
 	);
-	return (fetchedModels || providerVal.models || []).map((m: any) => {
+	// 远端目录在前；本地 models.json 里上游没有的模型接在后面，
+	// 因为 models.json 是用户自己的配置，不能因刷新而消失。
+	const remote = fetchedModels || providerVal.models || [];
+	const listed = new Set(remote.map((m: any) => String(m.id).toLowerCase()));
+	const extra = fetchedModels
+		? (providerVal.models || []).filter((m) => !listed.has(m.id.toLowerCase()))
+		: [];
+	return [...remote, ...extra].map((m: any) => {
 		const id = m.id;
 		const configured = configuredModels.get(id.toLowerCase());
 		const normalizedId = id.toLowerCase().replace(/[^a-z0-9]/g, "");
 		const defaultMetadata = getDefaultMetadata(id);
 		const remoteContextWindow = pickRemoteContextWindow(m);
 		const remoteMaxTokens = pickRemoteMaxTokens(m);
+		const remoteInput = pickRemoteInput(m);
+		const remoteCost = pickRemoteCost(m);
+		const remoteThinkingLevelMap = pickRemoteThinkingLevelMap(m);
 		const isReasoning =
 			configured?.reasoning ??
 			(typeof m.reasoning === "boolean" ? m.reasoning : undefined) ??
@@ -554,8 +688,12 @@ function buildRegisteredModels(
 			id,
 			name: m.display_name || m.name || configured?.name || id,
 			reasoning: isReasoning,
-			input: configured?.input ?? defaultMetadata.input ?? ["text" as const],
+			input:
+				configured?.input ??
+				remoteInput ??
+				defaultMetadata.input ?? ["text" as const],
 			cost: configured?.cost ??
+				remoteCost ??
 				defaultMetadata.cost ?? {
 					input: 0,
 					output: 0,
@@ -563,14 +701,15 @@ function buildRegisteredModels(
 					cacheWrite: 0,
 				},
 			contextWindow:
-				remoteContextWindow ??
 				configured?.contextWindow ??
+				remoteContextWindow ??
 				defaultMetadata.contextWindow,
 			maxTokens:
-				remoteMaxTokens ?? configured?.maxTokens ?? defaultMetadata.maxTokens,
+				configured?.maxTokens ?? remoteMaxTokens ?? defaultMetadata.maxTokens,
 			// 仅 reasoning 模型挂 thinkingLevelMap；非 reasoning 模型留空避免显示思考等级选择器。
 			thinkingLevelMap: isReasoning
 				? (configured?.thinkingLevelMap ??
+					remoteThinkingLevelMap ??
 					defaultMetadata.thinkingLevelMap ??
 					DEFAULT_THINKING_LEVEL_MAP)
 				: undefined,
@@ -626,12 +765,49 @@ function stripRegistrationBaseUrl(model: any): any {
 	return rest;
 }
 
+/**
+ * pi 的模型刷新回调：重新拉取上游目录，让 `/model`（以及
+ * `pi update --models`）看到端点当前提供的模型。
+ *
+ * 远端列表与 models.json 合并；拉取失败、或 pi 要求离线刷新时回退到缓存/
+ * 本地配置。回调不抛异常，pi 因此保留现有列表而不是报刷新错误。
+ */
+function buildModelRefresher(
+	providerId: string,
+	state: Pick<
+		LazyProviderState,
+		"modelsBase" | "apiKey" | "providerVal" | "cachedModels"
+	>,
+	api: string,
+	minimal: boolean,
+) {
+	return async (context?: {
+		allowNetwork?: boolean;
+		signal?: AbortSignal;
+	}): Promise<any[]> => {
+		const fetched =
+			context?.allowNetwork === false
+				? null
+				: await fetchModels(state.modelsBase, state.apiKey, context?.signal);
+		if (fetched?.length) {
+			state.cachedModels = fetched;
+			writeModelsCache(providerId, fetched);
+		}
+		const models = buildRegisteredModels(
+			state.providerVal,
+			api,
+			fetched?.length ? fetched : state.cachedModels,
+		);
+		return minimal ? models.map(stripRegistrationBaseUrl) : models;
+	};
+}
+
 function registerProviderModels(
 	pi: ExtensionAPI,
 	providerId: string,
 	state: Pick<
 		LazyProviderState,
-		"baseUrl" | "apiKey" | "credentialType" | "providerVal"
+		"baseUrl" | "apiKey" | "credentialType" | "providerVal" | "modelsBase" | "cachedModels"
 	>,
 	fetchedModels?: any[],
 ): boolean {
@@ -644,10 +820,17 @@ function registerProviderModels(
 		state.providerVal,
 		state.credentialType,
 	);
+	const refreshModels = buildModelRefresher(
+		providerId,
+		state,
+		api,
+		scope.minimal,
+	);
 	if (scope.minimal) {
 		try {
 			pi.registerProvider(providerId, {
 				models: models.map(stripRegistrationBaseUrl),
+				refreshModels,
 			});
 			return true;
 		} catch (e) {
@@ -669,6 +852,7 @@ function registerProviderModels(
 		authHeader: true,
 		api,
 		models,
+		refreshModels,
 	});
 	return true;
 }
@@ -702,7 +886,28 @@ function shortWindowLabel(window: string): string {
 	const label = normalizeWindowLabel(window);
 	if (label === "daily") return "d";
 	if (label === "weekly") return "w";
+	if (label === "monthly") return "m";
 	return label;
+}
+
+/**
+ * magpie 的窗口名（`5 hours`、`7 days`、`Weekly`、`Month`、`Credits`）
+ * 归一化成扩展已有的窗口标签，好让状态栏沿用 `5h` / `d` / `w` / `m` 风格。
+ * 认不出来的名字（`Credits`、`Add-on credits`）原样保留。
+ */
+function normalizeMagpieWindowLabel(name: string): string {
+	const value = name.trim().toLowerCase();
+	const hours = /^(\d+)\s*hours?$/.exec(value);
+	if (hours) return `${hours[1]}h`;
+	if (value === "7 days" || value === "30 days") {
+		return value === "7 days" ? "weekly" : "monthly";
+	}
+	if (value === "daily" || value === "day" || value === "24 hours") {
+		return "daily";
+	}
+	if (value === "weekly" || value === "week") return "weekly";
+	if (value === "monthly" || value === "month") return "monthly";
+	return name.trim() || "default";
 }
 
 const BRAILLE_STEPS = ["⡀", "⣀", "⣤", "⣶", "⣿"] as const;
@@ -853,7 +1058,7 @@ export function formatUsagePercent(
 }
 
 function pickQuotaWindows(rateLimits: RateLimit[]): RateLimit[] {
-	const wanted = ["5h", "daily", "weekly"];
+	const wanted = ["5h", "daily", "weekly", "monthly"];
 	const byLabel = new Map(
 		rateLimits.map((rl) => [normalizeWindowLabel(rl.window), rl]),
 	);
@@ -872,10 +1077,43 @@ function subscriptionPercent(used: number, limit: number | null): number | null 
 // Usage fetch — aligned with CodexBar sub2api.js
 // ---------------------------------------------------------------------------
 
+/**
+ * magpie 的额度路由候选（`/v1/magpie/quotas`）。
+ * 默认带 `?kept=1`：读 magpie 自己缓存的那份，不打上游厂商。
+ */
+function buildMagpieQuotaCandidates(baseUrl: string): string[] {
+	const cleanBase = baseUrl.replace(/\/+$/, "");
+	const root = cleanBase.replace(/\/v1\/?$/, "");
+	const urls = [
+		`${cleanBase}/magpie/quotas`,
+		`${root}/v1/magpie/quotas`,
+	];
+	return [...new Set(urls)].map((url) => `${url}?kept=1`);
+}
+
+/** 去掉 `kept=1`：`/quota` 命令用它做一次现场读取。 */
+function withoutKept(url: string): string {
+	return url.replace(/([?&])kept=1(?=&|$)/, "$1").replace(/[?&]$/, "");
+}
+
+/** magpie `/v1/magpie/quotas` 的响应：`{object, data:[card]}`，卡片带 `windows`。 */
+function isMagpieQuotaPayload(data: any): boolean {
+	return (
+		Boolean(data) &&
+		typeof data === "object" &&
+		!Array.isArray(data) &&
+		Array.isArray(data.data) &&
+		data.data.some(
+			(card: any) =>
+				card && typeof card === "object" && Array.isArray(card.windows),
+		)
+	);
+}
+
 async function probeUsageEndpoint(
 	baseUrl: string,
 	apiKey: string,
-): Promise<string | null> {
+): Promise<UsageSource | null> {
 	const candidates = buildUsageCandidates(baseUrl);
 	for (const url of candidates) {
 		const res = await fetchWithRetry(url, {
@@ -914,19 +1152,90 @@ async function probeUsageEndpoint(
 					debugQuotaLog(`[sub2api-quota] Probe rejected: isValid=false at ${url}`);
 					return null;
 				}
-				return url;
+				return { kind: "sub2api", url, refreshUrl: url };
 			}
 			// 兼容旧响应：只要是对象且含任意已知字段即视为可用
 			if (data && typeof data === "object" && !Array.isArray(data)) {
 				// 至少返回过 JSON 对象，视为探测成功（避免误判）
 				// 但需包含上述字段校验，兜底返回 url 以便后续 updateQuota 再做细校验
-				if (Object.keys(data).length > 0) return url;
+				if (Object.keys(data).length > 0) {
+					return { kind: "sub2api", url, refreshUrl: url };
+				}
+			}
+		} catch {
+			// silent
+		}
+	}
+
+	// sub2api 没有额度端点（如 magpie 网关对 /v1/usage 返回 404）时，试 magpie 的
+	for (const url of buildMagpieQuotaCandidates(baseUrl)) {
+		const res = await fetchWithRetry(url, {
+			headers: {
+				Authorization: `Bearer ${apiKey}`,
+				Accept: "application/json",
+			},
+		});
+		if (!res) continue;
+		if (res.status === 401 || res.status === 403) {
+			debugQuotaLog(
+				`[sub2api-quota] Auth rejected for ${baseUrl} at ${url} (HTTP ${res.status})`,
+			);
+			return null;
+		}
+		if (!res.ok) continue;
+		try {
+			const text = await res.text();
+			if (text.includes("<!doctype") || text.includes("<html")) continue;
+			if (isMagpieQuotaPayload(JSON.parse(text))) {
+				return { kind: "magpie", url, refreshUrl: withoutKept(url) };
 			}
 		} catch {
 			// silent
 		}
 	}
 	return null;
+}
+
+/**
+ * magpie 的额度卡：每张卡是一个上游账号，`windows[].used` 已经是百分比。
+ * 没有可展示窗口的卡片丢掉；一张都没有时返回 null（当作拿不到额度）。
+ */
+function parseMagpieCards(raw: any): MagpieCard[] | null {
+	if (!Array.isArray(raw?.data)) return null;
+	const cards: MagpieCard[] = [];
+	for (const entry of raw.data) {
+		if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+		const windows: MagpieWindow[] = (Array.isArray(entry.windows) ? entry.windows : [])
+			.map((w: any): MagpieWindow | null => {
+				if (!w || typeof w !== "object" || Array.isArray(w)) return null;
+				const name = safeString(w.name) ?? "";
+				const used = safeFiniteNumber(w.used);
+				if (!name || used === null) return null;
+				return {
+					name,
+					label: normalizeMagpieWindowLabel(name),
+					used,
+					remaining: safeFiniteNumber(w.remaining) ?? Math.max(0, 100 - used),
+					resetsAt: safeString(w.resetsAt),
+					display: safeString(w.display),
+				};
+			})
+			.filter((w: MagpieWindow | null): w is MagpieWindow => w !== null);
+		if (!windows.length) continue;
+		cards.push({
+			provider: safeString(entry.provider) ?? "",
+			name: safeString(entry.name) ?? safeString(entry.provider) ?? "magpie",
+			kind: safeString(entry.kind) ?? "",
+			plan: safeString(entry.plan),
+			user: safeString(entry.user),
+			balance: safeFiniteNumber(entry.balance),
+			unit: safeString(entry.unit) ?? "USD",
+			readAt: safeString(entry.readAt),
+			until: safeString(entry.until),
+			windows,
+		});
+	}
+	return cards.length ? cards : null;
 }
 
 function parseQuota(raw: any, fallbackUnit: string): Quota | null {
@@ -989,11 +1298,11 @@ function parseUsageTotals(raw: any): UsageTotals | null {
 
 async function updateQuota(
 	providerId: string,
-	usageUrl: string,
+	source: UsageSource,
 	apiKey: string,
 ): Promise<boolean> {
 	try {
-		const res = await fetchWithRetry(usageUrl, {
+		const res = await fetchWithRetry(source.url, {
 			headers: {
 				Authorization: `Bearer ${apiKey}`,
 				Accept: "application/json",
@@ -1025,6 +1334,39 @@ async function updateQuota(
 		if (data.isValid === false) {
 			console.error(`[sub2api-quota] API rejected key for ${providerId} (isValid=false)`);
 			return false;
+		}
+
+		// magpie 的额度卡：每张卡是一个上游账号，used/remaining 已是百分比
+		if (source.kind === "magpie") {
+			const cards = parseMagpieCards(data);
+			if (!cards) {
+				console.error(
+					`[sub2api-quota] magpie answered no quota cards for ${providerId}`,
+				);
+				return false;
+			}
+			quotaProviders.set(providerId, {
+				source,
+				apiKey,
+				rateLimits: [],
+				dailyUsage: [],
+				todayCost: 0,
+				totalCost: 0,
+				status: "valid",
+				mode: "magpie",
+				lastUpdated: Date.now(),
+				quota: null,
+				subscription: null,
+				balance: null,
+				unit: "USD",
+				planName: null,
+				remaining: null,
+				expiresAt: null,
+				todayUsage: null,
+				totalUsage: null,
+				magpie: cards,
+			});
+			return true;
 		}
 
 		// ---- 基础字段 ----
@@ -1090,7 +1432,7 @@ async function updateQuota(
 		// 此处保留 daily_usage 仅用于 totalCost 兜底与 /quota 明细，不参与状态栏主窗口计算
 
 		quotaProviders.set(providerId, {
-			baseUrl: usageUrl,
+			source,
 			apiKey,
 			rateLimits,
 			dailyUsage,
@@ -1108,6 +1450,7 @@ async function updateQuota(
 			expiresAt,
 			todayUsage: usageToday,
 			totalUsage: usageTotal,
+			magpie: null,
 		});
 		return true;
 	} catch (e) {
@@ -1116,11 +1459,64 @@ async function updateQuota(
 	}
 }
 
+/**
+ * 当前模型该看哪张 magpie 额度卡。
+ *
+ * magpie 的模型 id 以所属上游开头（`codex/gpt-6.1-sol` 属于 `codex` 卡），
+ * 所以优先取模型前缀匹配的那张卡；匹配不到（或不知道当前模型）时取最紧的
+ * 那张（用量最高的窗口最满），因为它最可能决定下一次路由。
+ */
+export function pickMagpieCard(
+	cards: MagpieCard[],
+	modelId?: string,
+): MagpieCard | null {
+	const withWindows = cards.filter((card) => card.windows.length > 0);
+	if (!withWindows.length) return null;
+	const owner = modelId?.split("/")[0]?.toLowerCase();
+	if (owner) {
+		const match = withWindows.find(
+			(card) => card.provider.toLowerCase() === owner,
+		);
+		if (match) return match;
+	}
+	const peak = (card: MagpieCard) =>
+		Math.max(...card.windows.map((w) => w.used));
+	return withWindows.reduce((a, b) => (peak(b) > peak(a) ? b : a));
+}
+
+/** magpie 窗口转成状态栏用的 rate limit（`limit` 为 100，magpie 直接给百分比）。 */
+function magpieWindowRateLimit(window: MagpieWindow): RateLimit {
+	return {
+		limit: 100,
+		used: window.used,
+		remaining: window.remaining,
+		window: window.label,
+		reset_at: window.resetsAt ?? "",
+	};
+}
+
 export function formatStatusText(
 	providerId: string,
 	info: QuotaInfo,
 	style: "progress" | "numeric" = "progress",
+	modelId?: string,
 ): string {
+	// magpie 网关：上游账号的额度窗口（used 已是百分比），带上账号名。
+	// 状态栏空间有限，最多 3 个窗口，最紧的在前（账号的 credits 用尽时
+	// 比它那个才用 1% 的 7 天窗口更值得看）。
+	if (info.magpie?.length) {
+		const card = pickMagpieCard(info.magpie, modelId);
+		if (card) {
+			const windows = card.windows
+				.map(magpieWindowRateLimit)
+				.sort((a, b) => b.used - a.used)
+				.slice(0, 3);
+			const label = card.provider || card.name;
+			return `● ${providerId} ${label} ${windows
+				.map((rl) => formatUsagePercent(rl, style))
+				.join(" · ")}`;
+		}
+	}
 	// 优先级与 CodexBar 一致：subscription > quota > rate_limits > balance/todayCost
 	// CodexBar sub2api.js: if (subscription) primary=daily, secondary=weekly, tertiary=monthly
 	//                     else if (quota) primary=quota
@@ -1242,6 +1638,7 @@ function readModelsCache(providerId: string): any[] | undefined {
 async function fetchModels(
 	baseUrl: string,
 	apiKey: string,
+	signal?: AbortSignal,
 ): Promise<any[] | null> {
 	const url = `${baseUrl.replace(/\/+$/, "")}/models`;
 	const res = await fetchWithRetry(url, {
@@ -1249,6 +1646,7 @@ async function fetchModels(
 			Authorization: `Bearer ${apiKey}`,
 			Accept: "application/json",
 		},
+		signal,
 	});
 	try {
 		if (res?.ok) {
@@ -1425,14 +1823,14 @@ export default async function (pi: ExtensionAPI) {
 		if (!state) return false;
 		if (!state.quotaProbePromise) {
 			state.quotaProbePromise = (async () => {
-				if (state.usageUrl === undefined) {
-					state.usageUrl = await probeUsageEndpoint(
+				if (state.usageSource === undefined) {
+					state.usageSource = await probeUsageEndpoint(
 						state.baseUrl,
 						state.apiKey,
 					);
-					if (state.usageUrl) {
+					if (state.usageSource) {
 						debugQuotaLog(
-							`[sub2api-quota] Detected usage endpoint for provider: ${providerId} at ${state.usageUrl}`,
+							`[sub2api-quota] Detected ${state.usageSource.kind} usage endpoint for provider: ${providerId} at ${state.usageSource.url}`,
 						);
 					} else {
 						debugQuotaLog(
@@ -1440,8 +1838,8 @@ export default async function (pi: ExtensionAPI) {
 						);
 					}
 				}
-				if (!state.usageUrl) return false;
-				return updateQuota(providerId, state.usageUrl, state.apiKey);
+				if (!state.usageSource) return false;
+				return updateQuota(providerId, state.usageSource, state.apiKey);
 			})()
 				.catch((e) => {
 					console.error(
@@ -1464,7 +1862,7 @@ export default async function (pi: ExtensionAPI) {
 		void loadRemoteModels(providerId);
 		const info = quotaProviders.get(providerId);
 		const refresh = info
-			? updateQuota(providerId, info.baseUrl, info.apiKey)
+			? updateQuota(providerId, info.source, info.apiKey)
 			: ensureQuotaProvider(providerId);
 		void refresh.then((ok) => {
 			if (ok) onQuota?.();
@@ -1484,7 +1882,10 @@ export default async function (pi: ExtensionAPI) {
 		if (!info) return;
 		ctx.ui.setStatus(
 			"sub2api-quota",
-			ctx.ui.theme.fg("accent", formatStatusText(providerId, info, style)),
+			ctx.ui.theme.fg(
+				"accent",
+				formatStatusText(providerId, info, style, ctx.model?.id),
+			),
 		);
 	}
 
@@ -1523,7 +1924,7 @@ export default async function (pi: ExtensionAPI) {
 				if (!ok) return;
 				const info = quotaProviders.get(model.provider);
 				if (!info) return;
-				return updateQuota(model.provider, info.baseUrl, info.apiKey).then(
+				return updateQuota(model.provider, info.source, info.apiKey).then(
 					() => {
 						if (ctx.model?.provider !== model.provider) return;
 						updateStatusBar(ctx, model.provider);
@@ -1572,7 +1973,12 @@ export default async function (pi: ExtensionAPI) {
 				);
 				return;
 			}
-			const success = await updateQuota(providerId, info.baseUrl, info.apiKey);
+			// magpie 的 `?kept=1` 是缓存读，手动 /quota 要一次现场读取
+			const success = await updateQuota(
+				providerId,
+				{ ...info.source, url: info.source.refreshUrl },
+				info.apiKey,
+			);
 			if (!success) {
 				ctx.ui.notify("Failed to fetch billing info.", "error");
 				return;
@@ -1580,6 +1986,53 @@ export default async function (pi: ExtensionAPI) {
 
 			const fresh = quotaProviders.get(providerId);
 			if (!fresh) return;
+
+			// magpie 网关：列出网关背后的每个上游账号及其额度窗口
+			if (fresh.magpie?.length) {
+				const lines: string[] = [];
+				lines.push(`Provider:     ${providerId}`);
+				lines.push(`Source:       magpie (${fresh.source.refreshUrl})`);
+				lines.push(`Accounts:     ${fresh.magpie.length}`);
+				for (const card of fresh.magpie) {
+					const meta = [card.kind, card.plan, card.user]
+						.filter(Boolean)
+						.join(" · ");
+					lines.push("");
+					lines.push(
+						`${card.name} (${card.provider || "?"})${meta ? ` · ${meta}` : ""}`,
+					);
+					for (const window of card.windows) {
+						const pct = Math.max(0, Math.min(100, Math.round(window.used)));
+						const reset = window.resetsAt
+							? `resets ${new Date(window.resetsAt).toLocaleString()}`
+							: "";
+						lines.push(
+							`  ${window.name.padEnd(14)} ${String(pct).padStart(3)}%  ${renderProgressBar(pct, 10)}${window.display ? `  ${window.display}` : ""}${reset ? `  ${reset}` : ""}`,
+						);
+					}
+					if (card.balance !== null) {
+						lines.push(
+							`  Balance:       ${formatMoneyWithUnit(card.balance, card.unit)}`,
+						);
+					}
+					if (card.until) {
+						const d = new Date(card.until);
+						lines.push(
+							`  Until:         ${isNaN(d.getTime()) ? card.until : d.toLocaleString()}`,
+						);
+					}
+				}
+				const style = resolveUsageStyle(ctx.cwd);
+				const statusText = formatStatusText(
+					providerId,
+					fresh,
+					style === "none" ? "progress" : style,
+					ctx.model?.id,
+				);
+				ctx.ui.notify(statusText.replace(/^●\s*\S+\s*/, "") || statusText, "info");
+				console.error(lines.join("\n"));
+				return;
+			}
 
 			// Build detailed console layout aligned with CodexBar's usage summary
 			const lines: string[] = [];
@@ -1681,7 +2134,7 @@ export default async function (pi: ExtensionAPI) {
 			// Notify: compact status-aligned string
 			const style = resolveUsageStyle(ctx.cwd);
 			const toastStyle = style === "none" ? "progress" : style;
-			const statusText = formatStatusText(providerId, fresh, toastStyle);
+			const statusText = formatStatusText(providerId, fresh, toastStyle, ctx.model?.id);
 			// 去掉前缀 ● 后的纯指标用于 toast，避免重复图标
 			const toastText = statusText.replace(/^●\s*\S+\s*/, "");
 			if (fresh.subscription || fresh.quota || fresh.rateLimits.length) {

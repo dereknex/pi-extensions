@@ -8,8 +8,85 @@ import ts from "typescript";
 
 const testFile = fileURLToPath(import.meta.url);
 
+// A trimmed magpie `/v1/models` reply: the metadata magpie publishes that pi's model
+// definition can carry (window, reply cap, input modalities, thinking levels, prices).
+const MAGPIE_MODELS = [
+	{
+		id: "codex/gpt-6.1-sol",
+		display_name: "GPT-6.1-Sol",
+		context_window: 500000,
+		max_output_tokens: 128000,
+		modalities: { input: ["text", "image"] },
+		reasoning: true,
+		reasoning_levels: ["low", "medium", "high", "xhigh", "max", "ultra"],
+		pricing: {
+			prompt: "0.000002",
+			completion: "0.00001",
+			input_cache_read: "0.0000001",
+			input_cache_write: "0.0000025",
+		},
+		native_endpoints: ["/v1/responses"],
+	},
+	{
+		id: "auto/deepseek-v4.1-flash",
+		display_name: "DeepSeek-V4.1-Flash",
+		context_window: 1048576,
+		max_output_tokens: 384000,
+		modalities: { input: ["text", "image"] },
+		reasoning: true,
+		reasoning_levels: ["low", "high", "max"],
+	},
+];
+
+// A magpie `/v1/magpie/quotas` reply: one card per upstream account, `used` already a percentage.
+const MAGPIE_QUOTAS = {
+	object: "list",
+	data: [
+		{
+			provider: "codex",
+			name: "Codex",
+			kind: "subscription",
+			plan: "plus",
+			user: "me@example.test",
+			windows: [
+				{ name: "5 hours", used: 10, remaining: 90, resetsAt: "2026-11-02T19:05:13Z" },
+				{ name: "7 days", used: 31, remaining: 69, resetsAt: "2026-11-09T03:11:16Z" },
+			],
+		},
+		{
+			provider: "minimax-code",
+			name: "MiniMax Code",
+			kind: "subscription",
+			plan: "M Plan Starter",
+			windows: [
+				{ name: "Credits", used: 100, remaining: 0, display: "2000 / 2000" },
+				{ name: "7 days", used: 1, remaining: 99 },
+			],
+		},
+	],
+};
+
 async function runChild() {
-	if (process.env.PI_USAGE_SWITCH_CHILD === "1") {
+	let fetchCalls = 0;
+	const fetchedUrls = [];
+	if (process.env.PI_MAGPIE_QUOTA_CHILD === "1") {
+		// A magpie gateway: no sub2api usage endpoint, quotas under /v1/magpie/quotas
+		globalThis.fetch = async (input) => {
+			const url = String(input);
+			fetchedUrls.push(url);
+			if (url.includes("/magpie/quotas")) return Response.json(MAGPIE_QUOTAS);
+			return Response.json({ error: { message: "not found" } }, { status: 404 });
+		};
+	} else if (process.env.PI_MAGPIE_MODELS_CHILD === "1") {
+		globalThis.fetch = async (input) => {
+			fetchCalls++;
+			const url = String(input);
+			if (url.endsWith("/models")) {
+				return Response.json({ object: "list", data: MAGPIE_MODELS });
+			}
+			return new Response(null, { status: 404 });
+		};
+	} else if (process.env.PI_USAGE_SWITCH_CHILD === "1") {
 		globalThis.fetch = async (input) => {
 			const url = String(input);
 			if (url.startsWith("https://example.test/v1/usage")) {
@@ -29,15 +106,70 @@ async function runChild() {
 	);
 	const registrations = [];
 	const handlers = {};
+	const commands = new Map();
 	const pi = {
 		registerProvider: (_id, config) => registrations.push(config),
 		on: (event, handler) => {
 			handlers[event] = handler;
 		},
-		registerCommand: () => undefined,
+		registerCommand: (name, config) => {
+			commands.set(name, config);
+		},
 		unregisterProvider: () => undefined,
 	};
 	await loadExtension(pi);
+
+	if (process.env.PI_MAGPIE_QUOTA_CHILD === "1") {
+		const statuses = [];
+		const toasts = [];
+		const ctx = {
+			cwd: process.cwd(),
+			model: { provider: "test", id: "codex/gpt-6.1-sol" },
+			ui: {
+				setStatus: (_key, value) => statuses.push(value),
+				notify: (message) => toasts.push(message),
+				theme: { fg: (_color, value) => value },
+			},
+		};
+		handlers.model_select({ model: ctx.model }, ctx);
+		const deadline = Date.now() + 3000;
+		while (!statuses.at(-1) && Date.now() < deadline) {
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
+		const urlsAfterPoll = [...fetchedUrls];
+		const printed = [];
+		const realError = console.error;
+		console.error = (...args) => printed.push(args.join(" "));
+		await commands.get("quota").handler("", ctx);
+		console.error = realError;
+		console.log(
+			JSON.stringify({
+				status: statuses.at(-1),
+				urlsAfterPoll,
+				urlsAfterQuota: fetchedUrls,
+				quota: printed.join("\n"),
+				toast: toasts.at(-1),
+			}),
+		);
+		return;
+	}
+
+	if (process.env.PI_MAGPIE_MODELS_CHILD === "1") {
+		assert.equal(typeof registrations[0]?.refreshModels, "function");
+		const signal = new AbortController().signal;
+		const offline = await registrations[0].refreshModels({ allowNetwork: false, signal });
+		const callsAfterOffline = fetchCalls;
+		const online = await registrations[0].refreshModels({ allowNetwork: true, signal });
+		console.log(
+			JSON.stringify({
+				offline,
+				online,
+				callsAfterOffline,
+				callsAfterOnline: fetchCalls,
+			}),
+		);
+		return;
+	}
 
 	if (process.env.PI_USAGE_SWITCH_CHILD === "1") {
 		const statuses = [];
@@ -129,8 +261,11 @@ function runScenario(
 		usageSwitch = false,
 		baseUrl = "https://example.test/v1",
 		inlineApiKey = false,
+		localModels,
 		printBaseUrl = false,
 		printRegistration = false,
+		printMagpieModels = false,
+		printMagpieQuota = false,
 	} = {},
 ) {
 	const home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sub2api-home-"));
@@ -144,7 +279,9 @@ function runScenario(
 					baseUrl,
 					...(api ? { api } : {}),
 					...(inlineApiKey ? { apiKey: "inline-key" } : {}),
-					...(includeModels ? { models: [{ id: "test-model" }] } : {}),
+					...(includeModels
+						? { models: localModels ?? [{ id: "test-model" }] }
+						: {}),
 				},
 				...(usageSwitch
 					? {
@@ -186,6 +323,8 @@ function runScenario(
 				PI_REMOTE_MODELS_UNAVAILABLE: remoteModelsUnavailable ? "1" : "0",
 				...(printBaseUrl ? { PI_TEST_PRINT_BASE_URL: "1" } : {}),
 				...(printRegistration ? { PI_TEST_PRINT_REGISTRATION: "1" } : {}),
+				...(printMagpieModels ? { PI_MAGPIE_MODELS_CHILD: "1" } : {}),
+				...(printMagpieQuota ? { PI_MAGPIE_QUOTA_CHILD: "1" } : {}),
 				...(liveLogout ? { PI_LIVE_LOGOUT_CHILD: "1" } : {}),
 				...(usageSwitch ? { PI_USAGE_SWITCH_CHILD: "1" } : {}),
 				...(testUsageStyle ? { PI_TEST_USAGE_STYLE: testUsageStyle } : {}),
@@ -218,7 +357,7 @@ if (process.env.PI_API_SELECTION_CHILD === "1") {
 			new URL("../src/index.ts", import.meta.url),
 			"utf8",
 		);
-		const output = ts.transpileModule(`${source}\nexport { buildRegisteredModels };`, {
+		const output = ts.transpileModule(`${source}\nexport { buildRegisteredModels, pickMagpieCard };`, {
 			compilerOptions: {
 				module: ts.ModuleKind.ES2022,
 				target: ts.ScriptTarget.ES2022,
@@ -302,6 +441,103 @@ if (process.env.PI_API_SELECTION_CHILD === "1") {
 		});
 		assert.deepEqual(Object.keys(builtin).sort(), ["models"]);
 		assert.equal(builtin.models[0].baseUrl, undefined);
+
+		// magpie-style gateways: pi's model refresh pulls the live /v1/models catalog,
+		// merged with models.json — remote metadata fills what a local entry leaves out,
+		// local values win, and a locally configured model the upstream does not list is
+		// kept. An offline refresh returns the local list and makes no request.
+		const magpie = JSON.parse(
+			runScenario(compiledExtension, {
+				printMagpieModels: true,
+				localModels: [
+					{ id: "codex/gpt-6.1-sol" },
+					{
+						id: "auto/deepseek-v4.1-flash",
+						contextWindow: 111,
+						maxTokens: 222,
+						input: ["text"],
+					},
+					{ id: "local-only/model" },
+				],
+			}).stdout,
+		);
+		const localIds = [
+			"codex/gpt-6.1-sol",
+			"auto/deepseek-v4.1-flash",
+			"local-only/model",
+		];
+		assert.deepEqual(magpie.offline.map((m) => m.id), localIds);
+		assert.deepEqual(magpie.online.map((m) => m.id), localIds);
+		assert.equal(magpie.callsAfterOffline, 0, "offline refresh made a request");
+		assert.equal(magpie.callsAfterOnline, 1);
+		const sol = magpie.online[0];
+		assert.equal(sol.name, "GPT-6.1-Sol");
+		assert.equal(sol.contextWindow, 500000);
+		assert.equal(sol.maxTokens, 128000);
+		assert.deepEqual(sol.input, ["text", "image"]);
+		assert.equal(sol.cost.input, 2);
+		assert.equal(sol.cost.output, 10);
+		assert.ok(Math.abs(sol.cost.cacheRead - 0.1) < 1e-9, `cacheRead ${sol.cost.cacheRead}`);
+		assert.equal(sol.cost.cacheWrite, 2.5);
+		// the model's own levels mapped to pi's, the ones it lacks hidden (`ultra` ignored)
+		assert.deepEqual(sol.thinkingLevelMap, {
+			off: null,
+			minimal: null,
+			low: "low",
+			medium: "medium",
+			high: "high",
+			xhigh: "xhigh",
+			max: "max",
+		});
+		// a local value wins over the remote one
+		assert.equal(magpie.online[1].contextWindow, 111);
+		assert.equal(magpie.online[1].maxTokens, 222);
+		assert.deepEqual(magpie.online[1].input, ["text"]);
+		// a model only models.json knows keeps the built-in fallbacks
+		assert.equal(magpie.online[2].contextWindow, 128000);
+		assert.equal(magpie.online[2].maxTokens, 16384);
+		assert.deepEqual(magpie.online[2].input, ["text"]);
+
+		// magpie gateways: /v1/usage answers 404, so the probe falls through to
+		// /v1/magpie/quotas (cached read), and the status bar shows the card of the
+		// account serving the current model, most-used window first.
+		const magpieQuota = JSON.parse(
+			runScenario(compiledExtension, { printMagpieQuota: true }).stdout,
+		);
+		assert.equal(
+			magpieQuota.status,
+			"● test codex w [⣿⣤⡀⡀⡀] · 5h [⣤⡀⡀⡀⡀]",
+		);
+		assert.equal(
+			magpieQuota.toast,
+			"codex w [⣿⣤⡀⡀⡀] · 5h [⣤⡀⡀⡀⡀]",
+		);
+		// the polled read is the cached one; only /quota asks magpie for a fresh read
+		assert.equal(magpieQuota.urlsAfterPoll.length, 3);
+		assert.match(magpieQuota.urlsAfterPoll[0], /\/v1\/usage\?days=30&timezone=/);
+		assert.match(magpieQuota.urlsAfterPoll[1], /\/v1\/magpie\/quotas\?kept=1$/);
+		// the probe's hit is read again for the quota itself
+		assert.equal(magpieQuota.urlsAfterPoll[2], magpieQuota.urlsAfterPoll[1]);
+		assert.deepEqual(
+			magpieQuota.urlsAfterQuota.slice(0, 3),
+			magpieQuota.urlsAfterPoll,
+		);
+		assert.equal(
+			magpieQuota.urlsAfterQuota[3],
+			"https://example.test/v1/magpie/quotas",
+		);
+		for (const line of [
+			"Provider:     test",
+			"Source:       magpie (https://example.test/v1/magpie/quotas)",
+			"Accounts:     2",
+			"Codex (codex) · subscription · plus · me@example.test",
+			"5 hours",
+			"7 days",
+			"MiniMax Code (minimax-code) · subscription · M Plan Starter",
+			"2000 / 2000",
+		]) {
+			assert.ok(magpieQuota.quota.includes(line), `quota output misses ${line}`);
+		}
 		const unavailableModels = runScenario(compiledExtension, {
 			includeModels: false,
 			remoteModelsUnavailable: true,
@@ -371,6 +607,7 @@ if (process.env.PI_API_SELECTION_CHILD === "1") {
 			formatStatusText,
 			normalizeUsageStyle,
 			resolveUsageStyle,
+			pickMagpieCard,
 		} = await import(pathToFileURL(compiledExtension).href);
 		const baseUrlCases = [
 			["https://example.test/v1", "anthropic-messages", "https://example.test"],
@@ -588,6 +825,77 @@ if (process.env.PI_API_SELECTION_CHILD === "1") {
 		assert.equal(
 			formatStatusText("test", balInfo, "numeric"),
 			"● test $12.50",
+		);
+
+		// formatStatusText unit checks: magpie cards
+		const magpieCard = (provider, name, windows) => ({
+			provider,
+			name,
+			kind: "subscription",
+			plan: null,
+			user: null,
+			balance: null,
+			unit: "USD",
+			readAt: null,
+			until: null,
+			windows,
+		});
+		const magpieInfo = {
+			source: {
+				kind: "magpie",
+				url: "https://example.test/v1/magpie/quotas?kept=1",
+				refreshUrl: "https://example.test/v1/magpie/quotas",
+			},
+			magpie: [
+				magpieCard("codex", "Codex", [
+					{ name: "5 hours", label: "5h", used: 10, remaining: 90, resetsAt: null, display: null },
+					{ name: "7 days", label: "weekly", used: 31, remaining: 69, resetsAt: null, display: null },
+				]),
+				magpieCard("minimax-code", "MiniMax Code", [
+					{ name: "Credits", label: "Credits", used: 100, remaining: 0, resetsAt: null, display: "2000 / 2000" },
+				]),
+			],
+			rateLimits: [],
+			dailyUsage: [],
+			todayCost: 0,
+			totalCost: 0,
+			status: "valid",
+			mode: "magpie",
+			lastUpdated: 0,
+			quota: null,
+			subscription: null,
+			balance: null,
+			unit: "USD",
+			planName: null,
+			remaining: null,
+			expiresAt: null,
+			todayUsage: null,
+			totalUsage: null,
+		};
+		// the account the model belongs to, its most-used window first
+		assert.equal(
+			formatStatusText("test", magpieInfo, "progress", "codex/gpt-6.1-sol"),
+			"● test codex w [⣿⣤⡀⡀⡀] · 5h [⣤⡀⡀⡀⡀]",
+		);
+		assert.equal(
+			formatStatusText("test", magpieInfo, "numeric", "codex/gpt-6.1-sol"),
+			"● test codex w 31% · 5h 10%",
+		);
+		assert.equal(
+			formatStatusText("test", magpieInfo, "progress", "minimax-code/MiniMax-M3.1-Flash"),
+			"● test minimax-code Credits [⣿⣿⣿⣿⣿]",
+		);
+		// no model to match (or an unknown one): the card closest to running out
+		assert.equal(
+			formatStatusText("test", magpieInfo, "progress"),
+			"● test minimax-code Credits [⣿⣿⣿⣿⣿]",
+		);
+		assert.equal(pickMagpieCard(magpieInfo.magpie, "nope/x").provider, "minimax-code");
+		assert.equal(pickMagpieCard(magpieInfo.magpie, "codex/x").provider, "codex");
+		assert.equal(pickMagpieCard([], "codex/x"), null);
+		assert.equal(
+			pickMagpieCard([magpieCard("codex", "Codex", [])], "codex/x"),
+			null,
 		);
 
 		console.log("API adapter selection, model probing, reasoning metadata, and usage reset passed");

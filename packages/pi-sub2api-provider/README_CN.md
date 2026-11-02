@@ -17,9 +17,14 @@
 - 自动探测 usage endpoint：
   - `${baseUrl}/usage`
   - `${root}/v1/usage`
+  - magpie 网关：`${root}/v1/magpie/quotas?kept=1`（缓存读取，不打厂商）。状态栏显示当前模型
+    所属账号、最紧的窗口在前；`/quota` 列出网关背后的每个账号。
 - 获取并缓存 rate limit / daily usage。
-- 自动拉取 `${baseUrl}/models`，优先使用远端模型列表，仅在远端不可用时回退到本地配置模型。
-- 远端模型元数据存在时读取 `context_window`、`max_tokens` 及常见别名；如果 endpoint 只返回 `id` / `display_name`，则使用保守内置兜底值。
+- 自动拉取 `${baseUrl}/models`，并注册 `refreshModels`：打开 `/model`（或 `pi update --models`）时重新载入上游实时目录，而不是 `models.json` 里那份固定列表。
+- 远端列表与 `models.json` 合并：本地配置优先（`api`、`baseUrl`、`reasoning`、`input`、`cost`、`contextWindow`、`maxTokens`、`thinkingLevelMap`），上游没有列出的本地模型保留。端点不可用、或 pi 要求离线刷新时，使用本地配置 / 缓存列表，且不报错。
+- 远端模型元数据存在时读取，endpoint 只返回 `id` / `display_name` 时使用保守内置兜底值：
+  - 上限：`context_window` / `context_length` / `max_input_tokens`、`max_output_tokens` / `max_tokens` / `max_completion_tokens`；
+  - magpie 网关：`modalities.input` → `input`，`reasoning_levels` → `thinkingLevelMap`（模型没有的档位隐藏），`pricing`（每 token 的 USD）→ `cost`（每百万 token 的 USD）。
 - 调用 `pi.registerProvider()` 注册 provider。
 - 在 `session_start`、`model_select`、`turn_end` 时刷新/展示额度。
 - 注册 `/quota` 命令显示当前 provider 的详细账单与额度信息。
@@ -128,6 +133,81 @@ OpenAI 兼容路由的 sub2api 部署换了 adapter 也依然是 404。
 
 单条 `models` 条目里也可以写自己的 `api` / `baseUrl`；其中 `baseUrl` 会按原样使用，不再做 `/v1` 调整。
 
+### magpie 网关
+
+[magpie](https://github.com/yetone/magpie) 会跑一个网关（默认 `http://127.0.0.1:3425`），
+提供 OpenAI、Responses、Anthropic、Gemini 四种 API，所以 pi 把它当普通 provider 接即可。
+逐模型 `models` 数组是可选的 —— 目录会自己载入：
+
+```jsonc
+// ~/.pi/agent/models.json
+{
+  "providers": {
+    "my-magpie": {
+      "api": "openai-responses",
+      "baseUrl": "https://magpie.example.com/v1"
+    }
+  }
+}
+```
+
+```jsonc
+// ~/.pi/agent/auth.json
+{
+  "my-magpie": { "type": "api_key", "key": "<magpie 网关 key>" }
+}
+```
+
+`baseUrl` 写网关根地址或带 `/v1` 都行，注册出来是同一个端点。key 就是 magpie **Gateway** 页上
+那个；本机回环地址下 magpie 不校验，从别的机器访问则需要局域网共享 key。
+
+**模型自动载入。** pi 刷新模型目录时（打开 `/model`、`pi update --models`、`pi --list-models`）
+会拉一次 `/v1/models`，窗口、回复上限、输入模态、思考等级与价格都来自该响应。你在 `models.json`
+里写的值仍然优先（`api`、`baseUrl`、`reasoning`、`input`、`cost`、`contextWindow`、`maxTokens`、
+`thinkingLevelMap`），而你配置了、magpie 没列出的模型也会保留。
+
+**额度来自 magpie。** `/v1/usage` 返回 `404`，于是探测回退到 `/v1/magpie/quotas?kept=1`
+（magpie 的缓存读取，不打任何上游厂商）：
+
+- 状态栏显示当前模型所属账号（`codex/gpt-6.1-sol` → magpie 的 `codex` 卡），最紧的窗口在前，
+  最多 3 个：
+
+  ```text
+  ● my-magpie codex w [⣿⣤⡀⡀⡀] · 5h [⣤⡀⡀⡀⡀]
+  ● my-magpie example Credits [⣿⣿⣿⣿⣿] · w [⡀⡀⡀⡀⡀] · 4h [⡀⡀⡀⡀⡀]
+  ```
+
+  `"statusBarUsage": "numeric"` 时：
+
+  ```text
+  ● my-magpie codex w 31% · 5h 10%
+  ```
+
+- `/quota` 会向 magpie 要一次现场读取，并列出网关背后的每个账号，每个窗口带百分比、重置时间，
+  以及 magpie 自己的 `0 / 500` / `1500 / 1600` 渲染：
+
+  ```text
+  Provider:     my-magpie
+  Source:       magpie (https://magpie.example.com/v1/magpie/quotas)
+  Accounts:     2
+
+  Codex (codex) · subscription · plus · you@example.com
+    5 hours          0%  [⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀]  resets 03/11/2026, 3:16:15 am
+    7 days          31%  [⣿⣿⣿⡀⡀⡀⡀⡀⡀⡀]  resets 09/11/2026, 11:11:16 am
+  Example AI (example) · subscription · Free plan · you@example.com
+    Credits          0%  [⡀⡀⡀⡀⡀⡀⡀⡀⡀⡀]  0 / 500  resets 30/11/2026, 11:59:59 pm
+    Extra credits   94%  [⣿⣿⣿⣿⣿⣿⣿⣿⣿⣤]  1500 / 1600
+  ```
+
+不展示：magpie 的 reset 次数（`resets`）、账号为何被跳过（`holdsWhy`）、以及它的 token/金额汇总
+（`/v1/magpie/usage`）。
+
+> magpie 自己的 **Agents → Pi** 连接会往 `~/.pi/agent/models.json` 写一个名为 `magpie` 的 provider，
+> 把 key 内联在里面。本扩展只接管凭据在 `auth.json` 的 provider，所以那个 provider 不动：pi 能正常
+> 用，但不显示额度。想要两者都有，就把同一个网关按上面的方式配成自己的 provider（key 放 `auth.json`）。
+
+如果没出现额度，用 `SUB2API_QUOTA_DEBUG=1` 启动 pi，可以看到探测了哪些端点、为什么被拒绝。
+
 ### 接管范围
 
 `registerProvider` 的优先级高于 `models.json` 和 pi 内置 catalog，所以只有在 pi 自己解析不了时，
@@ -219,6 +299,13 @@ npm run changeset
   ```text
   ● my-sub2api d 25% · w 50%
   ```
+- magpie 网关（见 [magpie 网关](#magpie-网关)）：
+  ```text
+  ● my-magpie codex w [⣿⣤⡀⡀⡀] · 5h [⣤⡀⡀⡀⡀]
+  ```
+
+`/quota` 会把当前 provider 的完整明细打到控制台（账号、套餐、每个窗口、重置时间，以及上游提供
+时的今日/累计用量）。
 
 ## License
 
