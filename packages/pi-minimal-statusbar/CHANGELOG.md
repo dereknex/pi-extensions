@@ -1,5 +1,11 @@
 # pi-minimal-statusbar
 
+## 0.1.7
+
+### Patch Changes
+
+- b38fefc: Fix inflated tokens/s: measure wall time from message start to message end (queueing and first-token latency now count) and drop buffered/non-streaming responses, whose collapsed generation window used to inflate the session average permanently.
+
 ## 0.1.6
 
 ### Patch Changes
