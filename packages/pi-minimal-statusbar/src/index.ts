@@ -165,15 +165,22 @@ export default function (pi: FooterExtensionAPI) {
 	let sessionAbortController: AbortController | null = null;
 
 	// Session-cumulative performance & cache metrics. Cache hit rate and TPS are
-	// weighted running totals (not per-turn snapshots): TPS accumulates output
-	// tokens over generation time only (first delta -> message_end), so tool
-	// execution time never pollutes it, and the cache rate uses the same totals
-	// as /session (cacheWrite included in the denominator).
+	// weighted running totals (not per-turn snapshots). TPS accumulates output
+	// tokens over wall time from message_start to message_end, so the queue wait
+	// and first-token latency of a gateway count and tool execution time does
+	// not; the cache rate uses the same totals as /session (cacheWrite included
+	// in the denominator).
+	// Samples that never streamed (every delta inside streamMinSpanMs, e.g. a
+	// buffering gateway that returns one burst) are dropped: their window
+	// collapses to a few ms and one such sample would inflate the session
+	// average for the rest of the run.
+	const streamMinSpanMs = 100;
 	let startTime: number | null = null; // assistant message_start wall clock (TTFT base)
 	let firstDeltaTime: number | null = null; // first real content delta of the current message
+	let lastDeltaTime: number | null = null; // last content delta, to tell streaming from a burst
 	let lastTtft: number | null = null;
 	let totalOutputTokens = 0;
-	let totalGenMs = 0;
+	let totalWallMs = 0;
 	let sessionInput = 0;
 	let sessionCacheRead = 0;
 	let sessionCacheWrite = 0;
@@ -182,21 +189,25 @@ export default function (pi: FooterExtensionAPI) {
 		if (event.message.role === "assistant") {
 			startTime = Date.now();
 			firstDeltaTime = null;
+			lastDeltaTime = null;
 		}
 	});
 
 	pi.on("message_update", (event) => {
-		// Only a real content delta (text/thinking/toolcall) counts as first
-		// token; the initial "start" event carries no token.
+		// Only a real content delta (text/thinking/toolcall) counts as a token;
+		// the initial "start" event carries none.
 		if (
 			event.message.role === "assistant" &&
 			startTime &&
-			!firstDeltaTime &&
 			event.assistantMessageEvent?.type.endsWith("_delta")
 		) {
-			firstDeltaTime = Date.now();
-			lastTtft = (firstDeltaTime - startTime) / 1000;
-			tuiRef?.requestRender();
+			const now = Date.now();
+			lastDeltaTime = now;
+			if (!firstDeltaTime) {
+				firstDeltaTime = now;
+				lastTtft = (now - startTime) / 1000;
+				tuiRef?.requestRender();
+			}
 		}
 	});
 
@@ -204,10 +215,15 @@ export default function (pi: FooterExtensionAPI) {
 		const message = event.message;
 		if (message.role === "assistant" && message.usage) {
 			const usage = message.usage;
-			// Weighted generation throughput: this message's output over its own
-			// generation window (tool execution between messages is excluded).
-			if (firstDeltaTime && usage.output > 0) {
-				totalGenMs += Date.now() - firstDeltaTime;
+			// Weighted throughput: this message's output over its own wall clock.
+			// Buffered bursts are skipped instead of counted at their collapsed
+			// window.
+			const streamed =
+				firstDeltaTime !== null &&
+				lastDeltaTime !== null &&
+				lastDeltaTime - firstDeltaTime >= streamMinSpanMs;
+			if (streamed && startTime !== null && usage.output > 0) {
+				totalWallMs += Date.now() - startTime;
 				totalOutputTokens += usage.output;
 			}
 			sessionInput += usage.input;
@@ -229,9 +245,10 @@ export default function (pi: FooterExtensionAPI) {
 		contextWindow = event.model.contextWindow;
 		startTime = null;
 		firstDeltaTime = null;
+		lastDeltaTime = null;
 		lastTtft = null;
 		totalOutputTokens = 0;
-		totalGenMs = 0;
+		totalWallMs = 0;
 		sessionInput = 0;
 		sessionCacheRead = 0;
 		sessionCacheWrite = 0;
@@ -536,7 +553,7 @@ export default function (pi: FooterExtensionAPI) {
 		sessionCacheRead = seededCacheRead;
 		sessionCacheWrite = seededCacheWrite;
 		totalOutputTokens = 0;
-		totalGenMs = 0;
+		totalWallMs = 0;
 		void refreshDirty();
 
 		ctx.ui.setFooter((tui, theme, footerData) => {
@@ -593,7 +610,7 @@ export default function (pi: FooterExtensionAPI) {
 							: theme.fg("accent", model);
 
 					// ── Real-time Performance & Cache Stats ──
-					const tps = computeWeightedTps(totalOutputTokens, totalGenMs);
+					const tps = computeWeightedTps(totalOutputTokens, totalWallMs);
 					const tpsStr =
 						footerSettings.showTps !== false && tps !== null
 							? theme.fg("muted", `${tps.toFixed(1)} t/s`)
@@ -801,14 +818,15 @@ export function computeCacheHitRate(
 }
 
 /**
- * Weighted generation throughput over the whole run: total output tokens over
- * total generation time in milliseconds. Weighting (instead of averaging
- * per-turn t/s) keeps short tool-call turns from distorting the figure.
- * Returns null while there is no generation time yet.
+ * Weighted end-to-end throughput over the whole run: total output tokens over
+ * total wall time in milliseconds (message_start -> message_end, so queueing and
+ * first-token latency count, tool time does not). Weighting (instead of
+ * averaging per-turn t/s) keeps short tool-call turns from distorting the
+ * figure. Returns null while there is no wall time yet.
  */
 export function computeWeightedTps(
 	totalOutputTokens: number,
-	totalGenMs: number,
+	totalWallMs: number,
 ): number | null {
-	return totalGenMs > 0 ? (totalOutputTokens / totalGenMs) * 1000 : null;
+	return totalWallMs > 0 ? (totalOutputTokens / totalWallMs) * 1000 : null;
 }

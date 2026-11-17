@@ -63,7 +63,7 @@ test("cache hit rate tolerates cache-only turns", () => {
 	assert.equal(computeCacheHitRate(0, 50000, 0), 100);
 });
 
-test("tps is weighted by total generation time, not per-turn average", () => {
+test("tps is weighted by total wall time, not per-turn average", () => {
 	// 1000 tokens over 2s → 500 t/s
 	assert.equal(computeWeightedTps(1000, 2000), 500);
 	// 5000 tokens over 10s → 500 t/s
@@ -72,7 +72,7 @@ test("tps is weighted by total generation time, not per-turn average", () => {
 	assert.equal(computeWeightedTps(3000, 9000), 333.3333333333333);
 });
 
-test("tps is null with no generation time", () => {
+test("tps is null with no wall time", () => {
 	assert.equal(computeWeightedTps(0, 0), null);
 	assert.equal(computeWeightedTps(500, 0), null);
 });
@@ -149,6 +149,11 @@ test("model or provider selection resets performance and cache metrics", async (
 			message: { role: "assistant" },
 			assistantMessageEvent: { type: "text_delta" },
 		});
+		now = 2_000;
+		handlers.message_update({
+			message: { role: "assistant" },
+			assistantMessageEvent: { type: "text_delta" },
+		});
 		now = 2_100;
 		handlers.message_end({
 			message: {
@@ -158,9 +163,29 @@ test("model or provider selection resets performance and cache metrics", async (
 		});
 
 		const beforeSwitch = footer.render(200).join("\n");
-		assert.match(beforeSwitch, /100\.0 t\/s/);
+		// Wall clock from message_start (1000) to message_end (2100) = 1100ms.
+		assert.match(beforeSwitch, /90\.9 t\/s/);
 		assert.match(beforeSwitch, /0\.10s ttft/);
 		assert.match(beforeSwitch, /cache:90%/);
+
+		// A buffered (non-streaming) response: every delta lands inside 20ms and
+		// carries 5000 tokens. It must not enter the weighted totals.
+		handlers.message_start({ message: { role: "assistant" } });
+		now = 10_010;
+		handlers.message_update({
+			message: { role: "assistant" },
+			assistantMessageEvent: { type: "text_delta" },
+		});
+		now = 10_020;
+		handlers.message_end({
+			message: {
+				role: "assistant",
+				usage: { input: 10, cacheRead: 90, cacheWrite: 0, output: 5_000 },
+			},
+		});
+
+		const afterBurst = footer.render(200).join("\n");
+		assert.match(afterBurst, /90\.9 t\/s/);
 
 		handlers.model_select({
 			model: {
@@ -341,6 +366,11 @@ test("adaptive degradation stages progressively fold elements to stay single lin
 		try {
 			handlers.message_start({ message: { role: "assistant" } });
 			now = 1100;
+			handlers.message_update({
+				message: { role: "assistant" },
+				assistantMessageEvent: { type: "text_delta" },
+			});
+			now = 2000;
 			handlers.message_update({
 				message: { role: "assistant" },
 				assistantMessageEvent: { type: "text_delta" },
